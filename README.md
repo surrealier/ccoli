@@ -16,6 +16,30 @@ Robot mode is planned as a Servo + Display combined interaction mode, but it is 
 
 ## Quick Start
 
+### Prerequisites
+
+- PC (to run the server and upload firmware)
+- Atom Echo ESP32 module
+
+```text
+[PC]
+  ├─ Run ccoli server
+  └─ Upload firmware via Arduino IDE/CLI
+
+[Atom Echo ESP32 module]
+  └─ Voice I/O over Wi-Fi
+```
+
+### Connection Diagram
+
+```mermaid
+flowchart LR
+    U[User voice] --> A[Atom Echo ESP32 module]
+    A <-->|Wi-Fi (same network)| P[PC]
+    P -->|ccoli server| L[Local LLM/Ollama]
+    P -->|Send response audio| A
+```
+
 ### 1) Install dependencies
 
 ```bash
