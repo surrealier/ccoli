@@ -31,6 +31,7 @@ class Config:
             "language": "ko"
         },
         "llm": {
+            "provider": "ollama",
             "base_url": "http://localhost:11434",
             "model": "qwen2.5:0.5b",
             "think": False,
@@ -120,6 +121,21 @@ class Config:
             # Environment variable overrides
             if "WEATHER_API_KEY" in os.environ:
                 self.config["weather"]["api_key"] = os.environ["WEATHER_API_KEY"]
+
+            if "LLM_PROVIDER" in os.environ:
+                self.config["llm"]["provider"] = os.environ["LLM_PROVIDER"]
+
+            if "LLM_MODEL" in os.environ:
+                self.config["llm"]["model"] = os.environ["LLM_MODEL"]
+
+            if "OPENAI_API_KEY" in os.environ:
+                self.config["llm"]["openai_api_key"] = os.environ["OPENAI_API_KEY"]
+
+            if "ANTHROPIC_API_KEY" in os.environ:
+                self.config["llm"]["anthropic_api_key"] = os.environ["ANTHROPIC_API_KEY"]
+
+            if "GEMINI_API_KEY" in os.environ:
+                self.config["llm"]["gemini_api_key"] = os.environ["GEMINI_API_KEY"]
             
             if "SERVER_PORT" in os.environ:
                 self.config["server"]["port"] = int(os.environ["SERVER_PORT"])

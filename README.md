@@ -104,6 +104,22 @@ Optional port override for one run:
 ccoli start --port 5002
 ```
 
+### 3-1) Configure LLM provider (Ollama/Gemini/Claude/ChatGPT)
+
+Default provider is Ollama. You can switch provider and model from CLI:
+
+```bash
+ccoli config llm --provider ollama --model qwen3:8b
+ccoli config llm --provider gemini --model gemini-1.5-flash --api-key <GEMINI_API_KEY>
+ccoli config llm --provider claude --model claude-3-5-haiku-latest --api-key <ANTHROPIC_API_KEY>
+ccoli config llm --provider chatgpt --model gpt-4o-mini --api-key <OPENAI_API_KEY>
+```
+
+When Ollama is selected, `ccoli` automatically:
+- installs Ollama if missing,
+- starts Ollama server,
+- pulls the selected model.
+
 ### 4) Flash Atom Echo firmware
 
 Use:
@@ -119,6 +135,8 @@ Make sure `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` exists before b
   - Temporary port override for one run
 - `ccoli config wifi <WiFi Name> password <password> port <port>`
   - Applies Wi-Fi/password/port to server + firmware secrets
+- `ccoli config llm --provider <ollama|gemini|claude|chatgpt> [--model <name>] [--api-key <key>]`
+  - Applies LLM provider settings and writes API key to `server/.env` for cloud providers
 
 ## Repository Layout
 

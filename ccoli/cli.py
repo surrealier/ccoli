@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -13,6 +17,12 @@ import yaml
 
 DEFAULT_SERVER_PORT = 5001
 DEFAULT_SERVER_IP = "YOUR_SERVER_IP"
+DEFAULT_LLM_MODELS = {
+    "ollama": "qwen3:8b",
+    "gemini": "gemini-1.5-flash",
+    "claude": "claude-3-5-haiku-latest",
+    "chatgpt": "gpt-4o-mini",
+}
 
 
 def _repo_root() -> Path:
@@ -29,6 +39,10 @@ def _server_entrypoint(root: Path) -> Path:
 
 def _server_config_path(root: Path) -> Path:
     return _server_dir(root) / "config.yaml"
+
+
+def _server_env_path(root: Path) -> Path:
+    return _server_dir(root) / ".env"
 
 
 def _device_dir(root: Path) -> Path:
@@ -84,6 +98,112 @@ def _save_yaml_dict(path: Path, data: dict) -> None:
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+
+
+def _upsert_env_var(path: Path, key: str, value: str) -> None:
+    lines = []
+    if path.exists():
+        lines = path.read_text(encoding="utf-8").splitlines()
+
+    needle = f"{key}="
+    replaced = False
+    for idx, line in enumerate(lines):
+        if line.startswith(needle):
+            lines[idx] = f"{key}={value}"
+            replaced = True
+            break
+
+    if not replaced:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"{key}={value}")
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _ollama_health_check(base_url: str, timeout: float = 1.0) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(base_url)
+        scheme = parsed.scheme or "http"
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if scheme == "https" else 80)
+        path = parsed.path.rstrip("/")
+        url = f"{scheme}://{host}:{port}{path}/api/tags"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def _install_ollama_if_needed() -> bool:
+    if shutil.which("ollama"):
+        return True
+
+    print("ollama not found; attempting automatic installation...")
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        cmd = "curl -fsSL https://ollama.com/install.sh | sh"
+        result = subprocess.run(cmd, shell=True, check=False)
+        return result.returncode == 0 and shutil.which("ollama") is not None
+    if sys.platform.startswith("win"):
+        result = subprocess.run(["winget", "install", "-e", "--id", "Ollama.Ollama"], check=False)
+        return result.returncode == 0 and shutil.which("ollama") is not None
+    return False
+
+
+def _ensure_ollama_server(base_url: str, timeout_sec: float = 10.0) -> bool:
+    if _ollama_health_check(base_url):
+        return True
+
+    subprocess.Popen(
+        ["ollama", "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if _ollama_health_check(base_url):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _configure_llm(root: Path, provider: str, model: str, base_url: Optional[str], api_key: Optional[str]) -> Path:
+    config_path = _server_config_path(root)
+    config_data = _load_yaml_dict(config_path)
+    llm_cfg = config_data.setdefault("llm", {})
+    if not isinstance(llm_cfg, dict):
+        llm_cfg = {}
+        config_data["llm"] = llm_cfg
+
+    llm_cfg["provider"] = provider
+    llm_cfg["model"] = model
+
+    if provider == "ollama":
+        llm_cfg["base_url"] = base_url or llm_cfg.get("base_url", "http://localhost:11434")
+        llm_cfg.setdefault("auto_start", True)
+        llm_cfg.setdefault("start_command", "ollama serve")
+        llm_cfg.setdefault("startup_timeout", 10.0)
+    else:
+        llm_cfg["base_url"] = base_url or ""
+
+    _save_yaml_dict(config_path, config_data)
+
+    if api_key:
+        env_path = _server_env_path(root)
+        env_key_map = {
+            "gemini": "GEMINI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+            "chatgpt": "OPENAI_API_KEY",
+        }
+        env_key = env_key_map.get(provider)
+        if env_key:
+            _upsert_env_var(env_path, env_key, api_key)
+            print(f"updated: {env_path} ({env_key})")
+
+    return config_path
 
 
 def _write_device_secrets(root: Path, ssid: str, password: str, port: int) -> Path:
@@ -210,6 +330,32 @@ def _cmd_config_wifi(tokens: Sequence[str]) -> int:
     return 0
 
 
+def _cmd_config_llm(provider: str, model: Optional[str], base_url: Optional[str], api_key: Optional[str]) -> int:
+    provider = provider.lower().strip()
+    selected_model = (model or DEFAULT_LLM_MODELS[provider]).strip()
+    root = _repo_root()
+
+    if provider == "ollama":
+        if not _install_ollama_if_needed():
+            print("error: failed to install ollama automatically", file=sys.stderr)
+            return 1
+        ollama_url = base_url or "http://localhost:11434"
+        if not _ensure_ollama_server(ollama_url):
+            print("error: failed to start ollama server", file=sys.stderr)
+            return 1
+        pull = subprocess.run(["ollama", "pull", selected_model], check=False)
+        if pull.returncode != 0:
+            print(f"error: failed to pull ollama model: {selected_model}", file=sys.stderr)
+            return pull.returncode
+
+    config_path = _configure_llm(root, provider, selected_model, base_url, api_key)
+    print(f"updated: {config_path}")
+    if provider != "ollama" and not api_key:
+        print("warning: no API key was provided. Set one in server/.env before running the server.")
+    print(f"llm provider set to: {provider} (model={selected_model})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ccoli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -232,6 +378,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="syntax: <WiFi Name> password <password> port <port>",
     )
 
+    llm_parser = config_subparsers.add_parser("llm", help="set LLM provider/model/API key")
+    llm_parser.add_argument(
+        "--provider",
+        required=True,
+        choices=tuple(DEFAULT_LLM_MODELS.keys()),
+        help="llm provider: ollama, gemini, claude, chatgpt",
+    )
+    llm_parser.add_argument("--model", default=None, help="model name (provider-specific)")
+    llm_parser.add_argument("--base-url", default=None, help="base URL (used mainly for ollama)")
+    llm_parser.add_argument("--api-key", default=None, help="API key for external providers")
+
     return parser
 
 
@@ -243,6 +400,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _cmd_start(args.port)
     if args.command == "config" and args.config_command == "wifi":
         return _cmd_config_wifi(args.tokens)
+    if args.command == "config" and args.config_command == "llm":
+        return _cmd_config_llm(args.provider, args.model, args.base_url, args.api_key)
 
     parser.print_help()
     return 1

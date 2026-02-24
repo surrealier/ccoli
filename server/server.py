@@ -512,11 +512,24 @@ def main():
 
     # Create a single shared LLM client
     llm_config = config.get_llm_config()
-    ensure_ollama_running(llm_config.get("base_url", "http://localhost:11434"), llm_config)
+    provider = (llm_config.get("provider", "ollama") or "ollama").lower()
+    if provider == "ollama":
+        ensure_ollama_running(llm_config.get("base_url", "http://localhost:11434"), llm_config)
+
+    api_key = ""
+    if provider == "chatgpt":
+        api_key = llm_config.get("openai_api_key") or os.getenv("OPENAI_API_KEY", "")
+    elif provider == "claude":
+        api_key = llm_config.get("anthropic_api_key") or os.getenv("ANTHROPIC_API_KEY", "")
+    elif provider == "gemini":
+        api_key = llm_config.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
+
     llm_client = LLMClient(
         base_url=llm_config.get("base_url", "http://localhost:11434"),
         model=llm_config.get("model", "qwen2.5:0.5b"),
         default_think=llm_config.get("think", False),
+        provider=provider,
+        api_key=api_key,
     )
     log.info(
         "LLM Client: %s (%s, default_think=%s)",
