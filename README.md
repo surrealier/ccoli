@@ -7,8 +7,6 @@
 - TTS (Text-to-Speech, sometimes written as TSS in older notes)
 - LLM (local Ollama-based reasoning)
 
-![ccoli character](docs/assets/ccoli-character.svg)
-
 ## Project Status
 
 - Agent mode: Available now
