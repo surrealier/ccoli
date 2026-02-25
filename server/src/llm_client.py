@@ -1,4 +1,4 @@
-"""Ollama HTTP API 클라이언트 - 단일 LLM 인스턴스로 전체 서버에서 공유"""
+"""Multi-provider LLM client (Ollama / Gemini / Claude / ChatGPT)."""
 import json
 import logging
 from typing import Optional, Union
@@ -11,7 +11,16 @@ ThinkType = Optional[Union[bool, str]]
 
 
 class LLMClient:
-    def __init__(self, base_url: str, model: str, default_think: ThinkType = False):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        default_think: ThinkType = False,
+        provider: str = "ollama",
+        api_key: str = "",
+    ):
+        self.provider = (provider or "ollama").strip().lower()
+        self.api_key = api_key or ""
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.default_think = default_think
@@ -25,7 +34,9 @@ class LLMClient:
         max_tokens: int = 256,
         think: ThinkType = None,
     ) -> str:
-        """ollama /api/chat 호출. messages는 [{"role": ..., "content": ...}, ...] 형식."""
+        """LLM chat request. messages format: [{"role": ..., "content": ...}, ...]."""
+        if self.provider != "ollama":
+            return self._chat_external(messages, temperature, max_tokens)
         try:
             if think is None:
                 think = self.default_think
@@ -89,6 +100,105 @@ class LLMClient:
         except Exception as exc:
             log.error("Ollama API error: %s", exc)
             return ""
+
+    def _chat_external(self, messages: list, temperature: float, max_tokens: int) -> str:
+        try:
+            if self.provider == "gemini":
+                return self._chat_gemini(messages, temperature, max_tokens)
+            if self.provider == "claude":
+                return self._chat_claude(messages, temperature, max_tokens)
+            if self.provider == "chatgpt":
+                return self._chat_openai(messages, temperature, max_tokens)
+            log.error("Unsupported LLM provider: %s", self.provider)
+        except Exception as exc:
+            log.error("%s API error: %s", self.provider, exc)
+        return ""
+
+    def _chat_openai(self, messages: list, temperature: float, max_tokens: int) -> str:
+        if not self.api_key:
+            raise RuntimeError("OPENAI_API_KEY is missing")
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=(5, 120),
+        )
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices") or []
+        if not choices:
+            return ""
+        message = choices[0].get("message") or {}
+        return (message.get("content") or "").strip()
+
+    def _chat_claude(self, messages: list, temperature: float, max_tokens: int) -> str:
+        if not self.api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is missing")
+        system_prompt = ""
+        non_system = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt += (msg.get("content") or "") + "\n"
+            else:
+                non_system.append(msg)
+
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "system": system_prompt.strip(),
+                "messages": non_system,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=(5, 120),
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = data.get("content") or []
+        text_parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+        return "".join(text_parts).strip()
+
+    def _chat_gemini(self, messages: list, temperature: float, max_tokens: int) -> str:
+        if not self.api_key:
+            raise RuntimeError("GEMINI_API_KEY is missing")
+
+        contents = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            mapped_role = "model" if role == "assistant" else "user"
+            if role == "system":
+                mapped_role = "user"
+            contents.append({"role": mapped_role, "parts": [{"text": msg.get("content", "")}]} )
+
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}",
+            json={
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": temperature,
+                    "maxOutputTokens": max_tokens,
+                },
+            },
+            timeout=(5, 120),
+        )
+        response.raise_for_status()
+        data = response.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return ""
+        candidate_content = (candidates[0].get("content") or {}).get("parts") or []
+        return "".join(part.get("text", "") for part in candidate_content if isinstance(part, dict)).strip()
 
     def _chat_once(
         self,
@@ -195,4 +305,3 @@ class LLMClient:
                 lines.append(f"ASSISTANT: {content}")
         lines.append("ASSISTANT:")
         return "\n".join(lines)
-
