@@ -16,6 +16,7 @@ from emotion_system import EmotionSystem
 from info_services import InfoServices
 from proactive_interaction import ProactiveInteraction
 from scheduler import Scheduler
+from src.integrations import IntegrationRegistry, WeatherIntegration, build_tts_debug_message
 from src.memory_manager import MemoryManager
 from src.intent_parser import parse_intent
 
@@ -65,6 +66,8 @@ class AgentMode:
         # 서브시스템 초기화
         self.emotion_system = EmotionSystem()
         self.info_services = InfoServices(weather_api_key, lat=lat, lon=lon)
+        self.integrations = IntegrationRegistry()
+        self.integrations.register(WeatherIntegration(weather_api_key, lat=lat, lon=lon), enabled=True)
         self.proactive = ProactiveInteraction(proactive_enabled, proactive_interval)
         self.scheduler = Scheduler()
 
@@ -272,7 +275,9 @@ class AgentMode:
             # 정보 서비스 요청 처리 (날씨, 뉴스 등) → LLM 컨텍스트로 주입
             info_context = None
             if not is_proactive:
-                info_data = self.info_services.process_info_request(text)
+                info_data = self._resolve_info_data(text)
+                if info_data and info_data.get("type") == "integration_error":
+                    return info_data.get("message", "요청 처리 중 오류가 발생했어요."), "none"
                 if info_data:
                     import json
                     info_context = json.dumps(info_data, ensure_ascii=False)
@@ -330,6 +335,24 @@ class AgentMode:
         except Exception as exc:
             log.error("LLM generation failed: %s", exc)
             return "죄송해요, 오류가 발생했어요.", "none"
+
+    def _resolve_info_data(self, text: str):
+        text_lower = (text or "").lower()
+        weather_keywords = ["날씨", "기온", "온도", "비", "눈"]
+        if any(keyword in text_lower for keyword in weather_keywords):
+            weather_result = self.integrations.execute("weather", "weather.current", {})
+            if weather_result:
+                if weather_result.ok:
+                    return weather_result.data
+                if weather_result.error:
+                    log.warning("weather integration error: %s %s", weather_result.error.code, weather_result.error.debug)
+                    return {
+                        "type": "integration_error",
+                        "integration": "weather",
+                        "code": weather_result.error.code.value,
+                        "message": build_tts_debug_message("weather", "날씨", weather_result.error.code),
+                    }
+        return self.info_services.process_info_request(text)
 
     async def _tts_gen(self, text, output_file):
         """TTS 생성 - Edge TTS를 사용한 음성 합성"""
