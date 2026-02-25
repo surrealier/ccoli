@@ -24,6 +24,34 @@ DEFAULT_LLM_MODELS = {
     "chatgpt": "gpt-4o-mini",
 }
 
+INTEGRATION_SPECS = {
+    "weather": {
+        "env_key": "WEATHER_API_KEY",
+        "required": ("api_key",),
+        "description": "OpenWeather 기반 날씨 조회",
+    },
+    "search": {
+        "env_key": "TAVILY_API_KEY",
+        "required": ("api_key",),
+        "description": "실시간 검색 조회",
+    },
+    "calendar-google": {
+        "env_key": None,
+        "required": ("client_id", "client_secret", "refresh_token"),
+        "description": "Google Calendar 연동",
+    },
+    "notify-slack": {
+        "env_key": "SLACK_BOT_TOKEN",
+        "required": ("api_key",),
+        "description": "Slack 알림 발송",
+    },
+    "maps": {
+        "env_key": "GOOGLE_MAPS_API_KEY",
+        "required": ("api_key",),
+        "description": "지도/경로 조회",
+    },
+}
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -121,6 +149,12 @@ def _upsert_env_var(path: Path, key: str, value: str) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _mask_secret(value: str) -> str:
+    if len(value) <= 6:
+        return "*" * len(value)
+    return f"{value[:3]}{'*' * (len(value) - 6)}{value[-3:]}"
+
+
 def _ollama_health_check(base_url: str, timeout: float = 1.0) -> bool:
     try:
         parsed = urllib.parse.urlparse(base_url)
@@ -204,6 +238,142 @@ def _configure_llm(root: Path, provider: str, model: str, base_url: Optional[str
             print(f"updated: {env_path} ({env_key})")
 
     return config_path
+
+
+def _load_env_vars(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _integration_state(root: Path) -> dict:
+    data = _load_yaml_dict(_server_config_path(root))
+    integrations = data.setdefault("integrations", {})
+    if not isinstance(integrations, dict):
+        integrations = {}
+        data["integrations"] = integrations
+    return data
+
+
+def _cmd_config_integration_list() -> int:
+    root = _repo_root()
+    config = _integration_state(root)
+    env_values = _load_env_vars(_server_env_path(root))
+    status = config.get("integrations", {})
+    for name, spec in INTEGRATION_SPECS.items():
+        cfg = status.get(name, {}) if isinstance(status.get(name), dict) else {}
+        enabled = bool(cfg.get("enabled", False))
+        configured = False
+        if spec["env_key"]:
+            configured = bool(env_values.get(spec["env_key"], "").strip())
+        else:
+            fields = cfg.get("fields", {}) if isinstance(cfg.get("fields"), dict) else {}
+            configured = all(bool(fields.get(field, "").strip()) for field in spec["required"])
+        print(f"- {name}: enabled={enabled}, configured={configured} ({spec['description']})")
+    return 0
+
+
+def _cmd_config_integration_set(provider: str, api_key: Optional[str], client_id: Optional[str], client_secret: Optional[str], refresh_token: Optional[str]) -> int:
+    root = _repo_root()
+    provider = provider.lower().strip()
+    if provider not in INTEGRATION_SPECS:
+        print(f"error: unknown provider `{provider}`", file=sys.stderr)
+        print(f"supported providers: {', '.join(INTEGRATION_SPECS.keys())}", file=sys.stderr)
+        return 2
+
+    spec = INTEGRATION_SPECS[provider]
+    config = _integration_state(root)
+    integrations = config.setdefault("integrations", {})
+    entry = integrations.setdefault(provider, {})
+    entry["enabled"] = True
+    env_path = _server_env_path(root)
+
+    missing: list[str] = []
+    if "api_key" in spec["required"]:
+        if not api_key:
+            missing.append("--api-key")
+        else:
+            env_key = spec["env_key"]
+            if env_key:
+                _upsert_env_var(env_path, env_key, api_key)
+                print(f"updated: {env_path} ({env_key}={_mask_secret(api_key)})")
+    else:
+        fields = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        }
+        missing = [f"--{field.replace('_', '-')}" for field in spec["required"] if not fields.get(field)]
+        if not missing:
+            entry["fields"] = fields
+
+    if missing:
+        print(f"error: missing required options: {', '.join(missing)}", file=sys.stderr)
+        return 2
+
+    _save_yaml_dict(_server_config_path(root), config)
+    print(f"updated: {_server_config_path(root)}")
+    return 0
+
+
+def _cmd_config_integration_enable(provider: str, enabled: bool) -> int:
+    root = _repo_root()
+    provider = provider.lower().strip()
+    if provider not in INTEGRATION_SPECS:
+        print(f"error: unknown provider `{provider}`", file=sys.stderr)
+        return 2
+
+    config = _integration_state(root)
+    integrations = config.setdefault("integrations", {})
+    entry = integrations.setdefault(provider, {})
+    entry["enabled"] = enabled
+    _save_yaml_dict(_server_config_path(root), config)
+    print(f"updated: {_server_config_path(root)}")
+    print(f"integration `{provider}` {'enabled' if enabled else 'disabled'}")
+    return 0
+
+
+def _cmd_config_integration_test(provider: str) -> int:
+    root = _repo_root()
+    provider = provider.lower().strip()
+    if provider not in INTEGRATION_SPECS:
+        print(f"error: unknown provider `{provider}`", file=sys.stderr)
+        return 2
+
+    config = _integration_state(root)
+    integrations = config.get("integrations", {})
+    entry = integrations.get(provider, {}) if isinstance(integrations, dict) else {}
+    if not bool(entry.get("enabled", False)):
+        print(f"error: integration `{provider}` is disabled. run `ccoli config integration enable {provider}`", file=sys.stderr)
+        return 1
+
+    env_values = _load_env_vars(_server_env_path(root))
+    spec = INTEGRATION_SPECS[provider]
+    if spec["env_key"]:
+        value = env_values.get(spec["env_key"], "")
+        if not value.strip():
+            print(
+                f"error: missing env key `{spec['env_key']}`. run `ccoli config integration set {provider} --api-key ...`",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"ok: {provider} integration key detected ({spec['env_key']}={_mask_secret(value)})")
+        return 0
+
+    fields = entry.get("fields", {}) if isinstance(entry.get("fields"), dict) else {}
+    missing = [field for field in spec["required"] if not fields.get(field)]
+    if missing:
+        print(f"error: missing fields in config.yaml: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    print(f"ok: {provider} integration fields configured")
+    return 0
 
 
 def _write_device_secrets(root: Path, ssid: str, password: str, port: int) -> Path:
@@ -389,6 +559,37 @@ def build_parser() -> argparse.ArgumentParser:
     llm_parser.add_argument("--base-url", default=None, help="base URL (used mainly for ollama)")
     llm_parser.add_argument("--api-key", default=None, help="API key for external providers")
 
+    integration_parser = config_subparsers.add_parser("integration", help="manage feature integrations")
+    integration_sub = integration_parser.add_subparsers(dest="integration_command", required=True)
+
+    integration_sub.add_parser("list", help="list integration configuration status")
+
+    set_parser = integration_sub.add_parser("set", help="set provider credentials")
+    set_parser.add_argument("provider", choices=tuple(INTEGRATION_SPECS.keys()))
+    set_parser.add_argument("--api-key", default=None)
+    set_parser.add_argument("--client-id", default=None)
+    set_parser.add_argument("--client-secret", default=None)
+    set_parser.add_argument("--refresh-token", default=None)
+
+    enable_parser = integration_sub.add_parser("enable", help="enable an integration")
+    enable_parser.add_argument("provider", choices=tuple(INTEGRATION_SPECS.keys()))
+
+    disable_parser = integration_sub.add_parser("disable", help="disable an integration")
+    disable_parser.add_argument("provider", choices=tuple(INTEGRATION_SPECS.keys()))
+
+    test_parser = integration_sub.add_parser("test", help="validate integration configuration")
+    test_parser.add_argument("provider", choices=tuple(INTEGRATION_SPECS.keys()))
+
+    voice_parser = config_subparsers.add_parser("voice-id", help="voice id mode controls")
+    voice_sub = voice_parser.add_subparsers(dest="voice_command", required=True)
+    voice_sub.add_parser("status")
+    voice_sub.add_parser("enable")
+    voice_sub.add_parser("disable")
+    delete_parser = voice_sub.add_parser("delete")
+    delete_parser.add_argument("--user", required=True)
+    threshold_parser = voice_sub.add_parser("threshold")
+    threshold_parser.add_argument("--value", required=True, type=float)
+
     return parser
 
 
@@ -402,6 +603,46 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _cmd_config_wifi(args.tokens)
     if args.command == "config" and args.config_command == "llm":
         return _cmd_config_llm(args.provider, args.model, args.base_url, args.api_key)
+    if args.command == "config" and args.config_command == "integration":
+        if args.integration_command == "list":
+            return _cmd_config_integration_list()
+        if args.integration_command == "set":
+            return _cmd_config_integration_set(
+                args.provider,
+                args.api_key,
+                args.client_id,
+                args.client_secret,
+                args.refresh_token,
+            )
+        if args.integration_command == "enable":
+            return _cmd_config_integration_enable(args.provider, True)
+        if args.integration_command == "disable":
+            return _cmd_config_integration_enable(args.provider, False)
+        if args.integration_command == "test":
+            return _cmd_config_integration_test(args.provider)
+    if args.command == "config" and args.config_command == "voice-id":
+        root = _repo_root()
+        config = _load_yaml_dict(_server_config_path(root))
+        voice_cfg = config.setdefault("voice_id", {})
+        if args.voice_command == "status":
+            print(f"voice-id enabled={bool(voice_cfg.get('enabled', False))}, threshold={voice_cfg.get('threshold', 0.72)}")
+            return 0
+        if args.voice_command == "enable":
+            voice_cfg["enabled"] = True
+        elif args.voice_command == "disable":
+            voice_cfg["enabled"] = False
+        elif args.voice_command == "delete":
+            users = voice_cfg.setdefault("deleted_users", [])
+            users.append(args.user)
+            print(f"scheduled deletion for user: {args.user}")
+        elif args.voice_command == "threshold":
+            if args.value <= 0.0 or args.value >= 1.0:
+                print("error: threshold must be between 0 and 1", file=sys.stderr)
+                return 2
+            voice_cfg["threshold"] = args.value
+        _save_yaml_dict(_server_config_path(root), config)
+        print(f"updated: {_server_config_path(root)}")
+        return 0
 
     parser.print_help()
     return 1
