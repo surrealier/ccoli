@@ -7,6 +7,7 @@
 """
 import asyncio
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -16,6 +17,15 @@ from emotion_system import EmotionSystem
 from info_services import InfoServices
 from proactive_interaction import ProactiveInteraction
 from scheduler import Scheduler
+from src.integrations import (
+    GoogleCalendarIntegration,
+    IntegrationRegistry,
+    MapsIntegration,
+    NotifyIntegration,
+    SearchIntegration,
+    WeatherIntegration,
+    build_tts_debug_message,
+)
 from src.memory_manager import MemoryManager
 from src.intent_parser import parse_intent
 
@@ -56,6 +66,7 @@ class AgentMode:
 
         # 대화 기록
         self.conversation_history = []
+        self.user_histories = {}
         self.max_history = 20
         self.conversation_count = 0
 
@@ -65,6 +76,19 @@ class AgentMode:
         # 서브시스템 초기화
         self.emotion_system = EmotionSystem()
         self.info_services = InfoServices(weather_api_key, lat=lat, lon=lon)
+        self.integrations = IntegrationRegistry()
+        self.integrations.register(WeatherIntegration(weather_api_key, lat=lat, lon=lon), enabled=True)
+        self.integrations.register(SearchIntegration(os.getenv("TAVILY_API_KEY", "")), enabled=True)
+        self.integrations.register(NotifyIntegration(os.getenv("SLACK_BOT_TOKEN", "")), enabled=True)
+        self.integrations.register(MapsIntegration(os.getenv("GOOGLE_MAPS_API_KEY", "")), enabled=True)
+        self.integrations.register(
+            GoogleCalendarIntegration(
+                os.getenv("GOOGLE_CLIENT_ID", ""),
+                os.getenv("GOOGLE_CLIENT_SECRET", ""),
+                os.getenv("GOOGLE_REFRESH_TOKEN", ""),
+            ),
+            enabled=True,
+        )
         self.proactive = ProactiveInteraction(proactive_enabled, proactive_interval)
         self.scheduler = Scheduler()
 
@@ -260,7 +284,7 @@ class AgentMode:
         """시스템 프롬프트 생성 - MemoryManager가 md 파일에서 조립"""
         return self.memory.build_system_prompt()
 
-    def generate_response(self, text: str, is_proactive: bool = False) -> tuple[str, str]:
+    def generate_response(self, text: str, is_proactive: bool = False, speaker_id: str | None = None) -> tuple[str, str]:
         """응답 생성. Returns (response_text, intent)."""
         if not self.llm:
             return "모델이 로드되지 않았습니다.", "none"
@@ -272,7 +296,9 @@ class AgentMode:
             # 정보 서비스 요청 처리 (날씨, 뉴스 등) → LLM 컨텍스트로 주입
             info_context = None
             if not is_proactive:
-                info_data = self.info_services.process_info_request(text)
+                info_data = self._resolve_info_data(text)
+                if info_data and info_data.get("type") == "integration_error":
+                    return info_data.get("message", "요청 처리 중 오류가 발생했어요."), "none"
                 if info_data:
                     import json
                     info_context = json.dumps(info_data, ensure_ascii=False)
@@ -284,7 +310,9 @@ class AgentMode:
 
             detected_emotion = self.emotion_system.analyze_emotion(text)
 
-            self.conversation_history.append(
+            history = self._history_for_user(speaker_id)
+
+            history.append(
                 {
                     "role": "user",
                     "content": text,
@@ -298,7 +326,7 @@ class AgentMode:
             if info_context:
                 system_prompt += f"\n\n[참고 데이터]\n{info_context}\n위 데이터를 바탕으로 자연스럽게 답변하세요."
             messages = [{"role": "system", "content": system_prompt}]
-            for conv in self.conversation_history[-self.max_history:]:
+            for conv in history[-self.max_history:]:
                 messages.append({"role": conv["role"], "content": conv["content"]})
 
             raw = self.llm.chat(messages, temperature=0.8, max_tokens=256)
@@ -313,7 +341,7 @@ class AgentMode:
                 self.proactive.sleep_until = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
 
             response_emotion = self.emotion_system.analyze_emotion(response)
-            self.conversation_history.append(
+            history.append(
                 {
                     "role": "assistant",
                     "content": response,
@@ -323,13 +351,69 @@ class AgentMode:
             )
 
             self.conversation_count += 1
-            self.memory.after_turn(self.conversation_history)
+            self.memory.after_turn(history)
 
             log.info("Agent Response (intent=%s): %s", intent, response)
             return response, intent
         except Exception as exc:
             log.error("LLM generation failed: %s", exc)
             return "죄송해요, 오류가 발생했어요.", "none"
+
+    def _history_for_user(self, speaker_id: str | None):
+        if not speaker_id:
+            return self.conversation_history
+        history = self.user_histories.get(speaker_id)
+        if history is None:
+            history = []
+            self.user_histories[speaker_id] = history
+        return history
+
+    def _resolve_info_data(self, text: str):
+        text_lower = (text or "").lower()
+
+        if any(keyword in text_lower for keyword in ["날씨", "기온", "온도", "비", "눈"]):
+            return self._integration_or_error("weather", "weather.current", {}, "날씨")
+
+        if any(keyword in text_lower for keyword in ["검색", "찾아줘", "검색해줘"]):
+            query = (text or "").replace("검색", "").strip() or (text or "")
+            return self._integration_or_error("search", "search.query", {"query": query}, "검색")
+
+        if any(keyword in text_lower for keyword in ["일정", "캘린더"]):
+            return self._integration_or_error("calendar-google", "calendar.list", {}, "캘린더")
+
+        if any(keyword in text_lower for keyword in ["알림", "슬랙"]):
+            return self._integration_or_error(
+                "notify-slack",
+                "notify.recent",
+                {},
+                "알림",
+            )
+
+        if any(keyword in text_lower for keyword in ["경로", "지도", "길찾기"]):
+            return self._integration_or_error(
+                "maps",
+                "maps.route",
+                {"origin": "현재 위치", "destination": "목적지"},
+                "지도",
+            )
+
+        return self.info_services.process_info_request(text)
+
+    def _integration_or_error(self, provider: str, intent: str, params: dict, display_name: str):
+        result = self.integrations.execute(provider, intent, params)
+        if result is None:
+            return None
+        if result.ok:
+            return result.data
+        if result.error:
+            log.warning("%s integration error: %s %s", provider, result.error.code, result.error.debug)
+            return {
+                "type": "integration_error",
+                "integration": provider,
+                "code": result.error.code.value,
+                "message": build_tts_debug_message(provider, display_name, result.error.code),
+            }
+        return None
 
     async def _tts_gen(self, text, output_file):
         """TTS 생성 - Edge TTS를 사용한 음성 합성"""

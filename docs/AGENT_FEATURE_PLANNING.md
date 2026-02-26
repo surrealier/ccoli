@@ -10,6 +10,21 @@
 
 ---
 
+## 구현 TODO 진행현황
+- [x] Integration 공통 인터페이스(`IntegrationResult`, `IntegrationError`, `BaseIntegration`) 추가
+- [x] Integration Registry(등록/활성화/헬스체크/실행) 추가
+- [x] Weather integration 구현 및 표준 에러 코드 적용
+- [x] `AgentMode`에서 날씨 요청을 IntegrationRegistry 경유로 처리
+- [x] `ccoli config integration` (`list/set/enable/disable/test`) CLI 추가
+- [x] `ccoli config voice-id` (`status/enable/disable/delete/threshold`) CLI 추가
+- [x] 신규 기능 테스트 케이스 추가 및 전체 테스트 통과
+- [x] README bash 예시 보강(integration/voice-id 설정·검증·실패 예시)
+
+- [x] 검색/캘린더/알림/지도 integration 모듈 1차 구현 및 Agent 라우팅 연결
+- [x] Integration 실패 원인별 TTS 디버깅 템플릿 1차 적용(날씨 경로)
+- [x] Voice ID 임베딩/식별 엔진(경량 기본 엔진) 및 런타임 게이트 구현
+- [x] 사용자별 대화 히스토리 분리(개인화 기반) 및 프로필 저장/삭제 구현
+
 ## 0) 현재 코드 구조 요약 (Planning 근거)
 
 ### 런타임 진입점

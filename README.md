@@ -120,6 +120,53 @@ When Ollama is selected, `ccoli` automatically:
 - starts Ollama server,
 - pulls the selected model.
 
+
+### 3-2) Configure integrations (weather/search/calendar/notify/maps)
+
+```bash
+# 상태 확인
+ccoli config integration list
+
+# 날씨 키 등록/검증
+ccoli config integration set weather --api-key <WEATHER_API_KEY>
+ccoli config integration enable weather
+ccoli config integration test weather
+
+# Google Calendar 필수 값 등록
+ccoli config integration set calendar-google \
+  --client-id <GOOGLE_CLIENT_ID> \
+  --client-secret <GOOGLE_CLIENT_SECRET> \
+  --refresh-token <GOOGLE_REFRESH_TOKEN>
+ccoli config integration test calendar-google
+```
+
+Failure example:
+
+```bash
+$ ccoli config integration test weather
+error: missing env key `WEATHER_API_KEY`. run `ccoli config integration set weather --api-key ...`
+```
+
+### 3-3) Voice ID control (CLI helper)
+
+```bash
+ccoli config voice-id status
+ccoli config voice-id enable
+ccoli config voice-id threshold --value 0.72
+ccoli config voice-id delete --user 홍길동
+ccoli config voice-id disable
+```
+
+
+Voice command examples for runtime Voice ID:
+
+```text
+@@홍길동 목소리 등록
+@@화자 인식 켜
+@@홍길동 목소리 삭제
+@@화자 인식 꺼
+```
+
 ### 4) Flash Atom Echo firmware
 
 Use:
@@ -137,6 +184,10 @@ Make sure `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` exists before b
   - Applies Wi-Fi/password/port to server + firmware secrets
 - `ccoli config llm --provider <ollama|gemini|claude|chatgpt> [--model <name>] [--api-key <key>]`
   - Applies LLM provider settings and writes API key to `server/.env` for cloud providers
+- `ccoli config integration <list|set|enable|disable|test> ...`
+  - Manages feature integration credentials and validation
+- `ccoli config voice-id <status|enable|disable|delete|threshold> ...`
+  - Controls Voice ID feature flags and stored profile cleanup
 
 ## Repository Layout
 
