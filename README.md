@@ -157,6 +157,16 @@ ccoli config voice-id delete --user 홍길동
 ccoli config voice-id disable
 ```
 
+
+Voice command examples for runtime Voice ID:
+
+```text
+@@홍길동 목소리 등록
+@@화자 인식 켜
+@@홍길동 목소리 삭제
+@@화자 인식 꺼
+```
+
 ### 4) Flash Atom Echo firmware
 
 Use:

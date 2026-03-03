@@ -78,6 +78,17 @@ class Config:
         },
         "audio": {
             "max_seconds": 12
+        },
+        "integrations": {
+            "weather": {"enabled": True},
+            "search": {"enabled": True},
+            "calendar-google": {"enabled": True},
+            "notify-slack": {"enabled": True},
+            "maps": {"enabled": True}
+        },
+        "voice_id": {
+            "enabled": False,
+            "threshold": 0.72
         }
     }
     
@@ -136,6 +147,17 @@ class Config:
 
             if "GEMINI_API_KEY" in os.environ:
                 self.config["llm"]["gemini_api_key"] = os.environ["GEMINI_API_KEY"]
+
+            if "TAVILY_API_KEY" in os.environ:
+                self.config.setdefault("integrations", {}).setdefault("search", {})["api_key"] = os.environ["TAVILY_API_KEY"]
+            if "SLACK_BOT_TOKEN" in os.environ:
+                self.config.setdefault("integrations", {}).setdefault("notify-slack", {})["api_key"] = os.environ["SLACK_BOT_TOKEN"]
+            if "GOOGLE_MAPS_API_KEY" in os.environ:
+                self.config.setdefault("integrations", {}).setdefault("maps", {})["api_key"] = os.environ["GOOGLE_MAPS_API_KEY"]
+            if "VOICE_ID_ENABLED" in os.environ:
+                self.config.setdefault("voice_id", {})["enabled"] = os.environ["VOICE_ID_ENABLED"].lower() in {"1", "true", "yes", "on"}
+            if "VOICE_ID_THRESHOLD" in os.environ:
+                self.config.setdefault("voice_id", {})["threshold"] = float(os.environ["VOICE_ID_THRESHOLD"])
             
             if "SERVER_PORT" in os.environ:
                 self.config["server"]["port"] = int(os.environ["SERVER_PORT"])
@@ -209,6 +231,10 @@ class Config:
     def get_logging_config(self) -> Dict:
         """Return logging settings"""
         return self.config.get("logging", {})
+
+    def get_voice_id_config(self) -> Dict:
+        """Return voice id settings"""
+        return self.config.get("voice_id", {})
     
     def save(self, config_file: str = None):
         """Save current settings to a YAML file"""

@@ -1,7 +1,11 @@
 from .base import BaseIntegration, IntegrationError, IntegrationErrorCode, IntegrationResult
-from .registry import IntegrationRegistry
-from .weather import WeatherIntegration
+from .calendar_google import GoogleCalendarIntegration
 from .error_tts import build_tts_debug_message
+from .maps import MapsIntegration
+from .notify import NotifyIntegration
+from .registry import IntegrationRegistry
+from .search import SearchIntegration
+from .weather import WeatherIntegration
 
 __all__ = [
     "BaseIntegration",
@@ -10,5 +14,9 @@ __all__ = [
     "IntegrationResult",
     "IntegrationRegistry",
     "WeatherIntegration",
+    "SearchIntegration",
+    "GoogleCalendarIntegration",
+    "NotifyIntegration",
+    "MapsIntegration",
     "build_tts_debug_message",
 ]

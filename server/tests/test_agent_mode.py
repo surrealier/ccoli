@@ -65,3 +65,14 @@ def test_crossfade_audio_boundaries_keeps_chunked_structure():
     # boundary 2개 × 160 samples가 전체에서 줄어든다.
     total_samples = sum(len(c) for c in crossed) // 2
     assert total_samples == (1600 * 3 - 160 * 2)
+
+
+def test_history_for_user_separated():
+    agent = AgentMode.__new__(AgentMode)
+    agent.conversation_history = []
+    agent.user_histories = {}
+    h1 = agent._history_for_user("alice")
+    h2 = agent._history_for_user("bob")
+    h1.append({"role": "user", "content": "a"})
+    assert h1 is not h2
+    assert len(h2) == 0

@@ -12,6 +12,7 @@ import subprocess
 import shlex
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from queue import Empty
 
 import numpy as np
@@ -37,6 +38,7 @@ from src.protocol import (
 )
 from src.robot_mode import RobotMode
 from src.stt_engine import STTEngine
+from src.voice_id import VoiceIDService
 from src.utils import clean_text
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -131,7 +133,7 @@ def ensure_ollama_running(base_url: str, llm_config: dict):
     return False
 
 
-def handle_connection(conn, addr, stt_engine: STTEngine, config):
+def handle_connection(conn, addr, stt_engine: STTEngine, config, voice_id_service: VoiceIDService | None = None):
     global current_mode, robot_handler, agent_handler
 
     log = __import__("logging").getLogger("server")
@@ -224,6 +226,47 @@ def handle_connection(conn, addr, stt_engine: STTEngine, config):
                 else:
                     log.info("STT: (empty/filtered)")
 
+                if voice_id_service and current_mode == "agent":
+                    if text.startswith("@@") and "목소리 등록" in text:
+                        user = text.replace("@@", "").replace("목소리 등록", "").strip() or "사용자"
+                        msg = voice_id_service.begin_register(user)
+                        wav_bytes = agent_handler.text_to_audio(msg)
+                        if wav_bytes:
+                            send_audio(conn, wav_bytes, send_lock)
+                        input_gate.mark_idle()
+                        continue
+                    if text.startswith("@@") and "화자 인식 켜" in text:
+                        voice_id_service.set_enabled(True)
+                        wav_bytes = agent_handler.text_to_audio("화자 인식을 켰어요.")
+                        if wav_bytes:
+                            send_audio(conn, wav_bytes, send_lock)
+                        input_gate.mark_idle()
+                        continue
+                    if text.startswith("@@") and "화자 인식 꺼" in text:
+                        voice_id_service.set_enabled(False)
+                        wav_bytes = agent_handler.text_to_audio("화자 인식을 껐어요.")
+                        if wav_bytes:
+                            send_audio(conn, wav_bytes, send_lock)
+                        input_gate.mark_idle()
+                        continue
+                    if text.startswith("@@") and "목소리 삭제" in text:
+                        user = text.replace("@@", "").replace("목소리 삭제", "").strip()
+                        deleted = voice_id_service.delete_user(user)
+                        msg = f"{user} 목소리 정보를 삭제했어요." if deleted else f"{user} 사용자 목소리 정보를 찾지 못했어요."
+                        wav_bytes = agent_handler.text_to_audio(msg)
+                        if wav_bytes:
+                            send_audio(conn, wav_bytes, send_lock)
+                        input_gate.mark_idle()
+                        continue
+
+                    register_msg = voice_id_service.consume_sample(pcm)
+                    if register_msg:
+                        wav_bytes = agent_handler.text_to_audio(register_msg)
+                        if wav_bytes:
+                            send_audio(conn, wav_bytes, send_lock)
+                        input_gate.mark_idle()
+                        continue
+
                 with state_lock:
                     cur = state["current_angle"]
 
@@ -279,10 +322,22 @@ def handle_connection(conn, addr, stt_engine: STTEngine, config):
                     if not text:
                         continue
 
-                    log.info("Agent Mode: Processing text: %s", text)
+                    speaker_id = None
+                    if voice_id_service:
+                        gate_result = voice_id_service.gate(pcm)
+                        if not gate_result.allowed:
+                            if gate_result.message:
+                                wav_bytes = agent_handler.text_to_audio(gate_result.message)
+                                if wav_bytes:
+                                    send_audio(conn, wav_bytes, send_lock)
+                            input_gate.mark_idle()
+                            continue
+                        speaker_id = gate_result.user
+
+                    log.info("Agent Mode: Processing text: %s (speaker=%s)", text, speaker_id or "unknown")
 
                     llm_start = time.time()
-                    response, intent = agent_handler.generate_response(text)
+                    response, intent = agent_handler.generate_response(text, speaker_id=speaker_id)
                     perf_logger.log_llm(time.time() - llm_start)
 
                     # Intent-based mode switching
@@ -558,13 +613,20 @@ def main():
 
     stt_engine = STTEngine(model_size=model_size, device=device, language=language)
 
+    voice_cfg = config.get_voice_id_config() if hasattr(config, "get_voice_id_config") else {}
+    voice_id_service = VoiceIDService(
+        Path("data/voice_profiles"),
+        enabled=bool(voice_cfg.get("enabled", False)),
+        threshold=float(voice_cfg.get("threshold", 0.72)),
+    )
+
     perf_logger = get_performance_logger()
     signal.signal(signal.SIGINT, lambda *_: perf_logger.print_stats())
 
     conn_manager = ConnectionManager(
         host=host,
         port=port,
-        handler=lambda conn, addr: handle_connection(conn, addr, stt_engine, config),
+        handler=lambda conn, addr: handle_connection(conn, addr, stt_engine, config, voice_id_service),
     )
     log.info("Server started. Default Mode: %s", current_mode)
     conn_manager.accept_loop()
