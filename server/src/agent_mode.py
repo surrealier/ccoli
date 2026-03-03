@@ -16,7 +16,7 @@ from emotion_system import EmotionSystem
 from info_services import InfoServices
 from proactive_interaction import ProactiveInteraction
 from scheduler import Scheduler
-from src.integrations import IntegrationRegistry, WeatherIntegration
+from src.integrations import IntegrationRegistry, WeatherIntegration, build_tts_debug_message
 from src.memory_manager import MemoryManager
 from src.intent_parser import parse_intent
 
@@ -276,6 +276,8 @@ class AgentMode:
             info_context = None
             if not is_proactive:
                 info_data = self._resolve_info_data(text)
+                if info_data and info_data.get("type") == "integration_error":
+                    return info_data.get("message", "요청 처리 중 오류가 발생했어요."), "none"
                 if info_data:
                     import json
                     info_context = json.dumps(info_data, ensure_ascii=False)
@@ -348,7 +350,7 @@ class AgentMode:
                         "type": "integration_error",
                         "integration": "weather",
                         "code": weather_result.error.code.value,
-                        "message": weather_result.error.user_message,
+                        "message": build_tts_debug_message("weather", "날씨", weather_result.error.code),
                     }
         return self.info_services.process_info_request(text)
 

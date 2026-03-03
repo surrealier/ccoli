@@ -31,3 +31,19 @@ def test_config_voice_threshold_validation(tmp_path, monkeypatch):
 
     rc = cli.main(["config", "voice-id", "threshold", "--value", "0.75"])
     assert rc == 0
+
+
+def test_config_voice_delete_removes_profile(tmp_path, monkeypatch):
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    (server_dir / "config.yaml").write_text("", encoding="utf-8")
+    voice_dir = server_dir / "data" / "voice_profiles"
+    voice_dir.mkdir(parents=True)
+    (voice_dir / "profiles.json").write_text('{"alice": {"user": "alice"}}', encoding="utf-8")
+    (voice_dir / "alice.npy").write_bytes(b"dummy")
+    monkeypatch.setattr(cli, "_repo_root", lambda: tmp_path)
+
+    rc = cli.main(["config", "voice-id", "delete", "--user", "alice"])
+    assert rc == 0
+    assert not (voice_dir / "alice.npy").exists()
+    assert "alice" not in (voice_dir / "profiles.json").read_text(encoding="utf-8")

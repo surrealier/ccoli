@@ -415,6 +415,48 @@ def _update_server_port(root: Path, port: int) -> Path:
     return config_path
 
 
+
+
+def _voice_profiles_dir(root: Path) -> Path:
+    return _server_dir(root) / "data" / "voice_profiles"
+
+
+def _voice_profile_users(root: Path) -> list[str]:
+    meta = _voice_profiles_dir(root) / "profiles.json"
+    if not meta.exists():
+        return []
+    try:
+        import json
+
+        data = json.loads(meta.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return sorted(data.keys())
+    except Exception:
+        return []
+    return []
+
+
+def _voice_profile_delete(root: Path, user: str) -> bool:
+    base = _voice_profiles_dir(root)
+    meta = base / "profiles.json"
+    deleted = False
+    if meta.exists():
+        try:
+            import json
+
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and user in data:
+                data.pop(user, None)
+                meta.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                deleted = True
+        except Exception:
+            pass
+    embed = base / f"{user}.npy"
+    if embed.exists():
+        embed.unlink()
+        deleted = True
+    return deleted
+
 def _parse_wifi_config_tokens(tokens: Sequence[str]) -> tuple[str, str, int]:
     cleaned = [token.strip() for token in tokens if token and token.strip()]
     if not cleaned:
@@ -625,16 +667,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         config = _load_yaml_dict(_server_config_path(root))
         voice_cfg = config.setdefault("voice_id", {})
         if args.voice_command == "status":
-            print(f"voice-id enabled={bool(voice_cfg.get('enabled', False))}, threshold={voice_cfg.get('threshold', 0.72)}")
+            users = _voice_profile_users(root)
+            print(f"voice-id enabled={bool(voice_cfg.get('enabled', False))}, threshold={voice_cfg.get('threshold', 0.72)}, users={len(users)}")
             return 0
         if args.voice_command == "enable":
             voice_cfg["enabled"] = True
         elif args.voice_command == "disable":
             voice_cfg["enabled"] = False
         elif args.voice_command == "delete":
-            users = voice_cfg.setdefault("deleted_users", [])
-            users.append(args.user)
-            print(f"scheduled deletion for user: {args.user}")
+            deleted = _voice_profile_delete(root, args.user)
+            if deleted:
+                print(f"deleted voice profile for user: {args.user}")
+            else:
+                print(f"no stored voice profile found for user: {args.user}")
         elif args.voice_command == "threshold":
             if args.value <= 0.0 or args.value >= 1.0:
                 print("error: threshold must be between 0 and 1", file=sys.stderr)
