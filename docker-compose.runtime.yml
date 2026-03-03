@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  stt-server:
+    build:
+      context: .
+      dockerfile: docker/server-runtime/Dockerfile
+    ports:
+      - "5001:5001"
+    env_file:
+      - server/.env
+    volumes:
+      - ./server/config.yaml:/app/server/config.yaml:ro
+      - ./server/logs:/app/server/logs
+      - ./server/wav_logs:/app/server/wav_logs
+    restart: unless-stopped

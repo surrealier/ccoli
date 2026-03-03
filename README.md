@@ -1,5 +1,11 @@
 # LLM_Aduino
 
+## 문서 우선순위
+- 제품 요구사항/범위 기준: `docs/PRD.md`
+- Codex 개발 운영 규칙: `docs/PROJECT_RULES_CODEX.md`
+- 빠른 실행 가이드: `README.md`, `QUICKSTART.md`
+- Docker 설치/구동/테스트 가이드: `docs/DOCKER_SETUP_AND_RUN.md`
+
 ## 개요
 - M5Stack Atom Echo(ESP32)로 음성(VAD 포함) 스트리밍 → PC 서버 → Whisper STT → 간단한 동작 명령(JSON) 응답.
 - ESP32는 내부 마이크로 16kHz 오디오를 서버에 보내고, 서버가 인식 결과에 따라 서보 동작 명령(예: 각도 설정)을 내려줍니다.

@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  server-tests:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    working_dir: /app
+    command: ["pytest", "-q", "tests/server_tests"]
+
+  sim-client:
+    build:
+      context: .
+      dockerfile: docker/sim-client/Dockerfile
+    profiles: ["integration"]
+    depends_on:
+      - server-tests
