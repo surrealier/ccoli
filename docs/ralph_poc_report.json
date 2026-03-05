@@ -1,0 +1,17 @@
+{
+  "tool": "ralph",
+  "candidates": [
+    "docs lint",
+    "test report automation"
+  ],
+  "security": "외부 업로드 경로 차단 시 도입 가능",
+  "cost": "초기 PoC는 low",
+  "conflict": "기존 docker test 파이프라인과 충돌 낮음",
+  "maintenance": "중간",
+  "rollout": [
+    "experiment",
+    "partial",
+    "full"
+  ],
+  "decision": "proceed_with_limited_poc"
+}

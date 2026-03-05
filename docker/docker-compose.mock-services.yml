@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  mock-weather:
+    image: python:3.11-slim
+    working_dir: /app
+    command: python -m http.server 18080
+    ports:
+      - "18080:18080"
+
+  mock-search:
+    image: python:3.11-slim
+    working_dir: /app
+    command: python -m http.server 18081
+    ports:
+      - "18081:18081"

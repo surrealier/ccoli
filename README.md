@@ -77,7 +77,7 @@ pip install -e .
 ### 2) Configure Wi-Fi, password, and port
 
 ```bash
-ccoli config wifi <WiFi Name> password <password> port <port>
+ccoli config wifi <WiFi Name> password <password> port <port> [mode wifi|wired]
 ```
 
 Example:
@@ -207,7 +207,7 @@ If Docker is unavailable in your local machine, run the same test stack on the G
   - Starts `server/server.py`
 - `ccoli start --port 5002`
   - Temporary port override for one run
-- `ccoli config wifi <WiFi Name> password <password> port <port>`
+- `ccoli config wifi <WiFi Name> password <password> port <port> [mode wifi|wired]`
   - Applies Wi-Fi/password/port to server + firmware secrets
 - `ccoli config llm --provider <ollama|gemini|claude|chatgpt> [--model <name>] [--api-key <key>]`
   - Applies LLM provider settings and writes API key to `server/.env` for cloud providers
@@ -269,3 +269,20 @@ If Docker is unavailable in your local machine, run the same test stack on the G
 ## License
 
 MIT. See `LICENSE`.
+
+
+## Planning/PRD Templates
+
+- PRD template: `docs/PRD_TEMPLATE.md`
+- Planning template: `docs/PLANNING_TEMPLATE.md`
+- Feature planning board: `docs/AGENT_FEATURE_PLANNING.md`
+
+## Mock Services Template
+
+```bash
+docker compose -f docker/docker-compose.mock-services.yml up
+```
+
+## Telegram Channel MVP
+
+운영 가이드: `docs/TELEGRAM_CHANNEL_GUIDE.md`
