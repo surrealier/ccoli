@@ -376,7 +376,7 @@ def _cmd_config_integration_test(provider: str) -> int:
     return 0
 
 
-def _write_device_secrets(root: Path, ssid: str, password: str, port: int) -> Path:
+def _write_device_secrets(root: Path, ssid: str, password: str, port: int, connection_mode: str = "wifi") -> Path:
     path = _device_secrets_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -387,6 +387,7 @@ def _write_device_secrets(root: Path, ssid: str, password: str, port: int) -> Pa
         "#ifndef DEVICE_SECRETS_H\n"
         "#define DEVICE_SECRETS_H\n\n"
         "#include <stdint.h>\n\n"
+        f'const char* CONNECTION_MODE = "{_escape_cpp_string(connection_mode)}";\n'
         f'const char* SSID = "{_escape_cpp_string(ssid)}";\n'
         f'const char* PASS = "{_escape_cpp_string(password)}";\n'
         f'const char* SERVER_IP = "{_escape_cpp_string(server_ip)}";\n'
@@ -397,7 +398,7 @@ def _write_device_secrets(root: Path, ssid: str, password: str, port: int) -> Pa
     return path
 
 
-def _update_server_port(root: Path, port: int) -> Path:
+def _update_server_connection(root: Path, port: int, connection_mode: str = "wifi") -> Path:
     config_path = _server_config_path(root)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -410,6 +411,12 @@ def _update_server_port(root: Path, port: int) -> Path:
     server_cfg["port"] = port
     if "host" not in server_cfg:
         server_cfg["host"] = "0.0.0.0"
+
+    connection_cfg = config_data.setdefault("connection", {})
+    if not isinstance(connection_cfg, dict):
+        connection_cfg = {}
+        config_data["connection"] = connection_cfg
+    connection_cfg["mode"] = connection_mode
 
     _save_yaml_dict(config_path, config_data)
     return config_path
@@ -457,7 +464,7 @@ def _voice_profile_delete(root: Path, user: str) -> bool:
         deleted = True
     return deleted
 
-def _parse_wifi_config_tokens(tokens: Sequence[str]) -> tuple[str, str, int]:
+def _parse_wifi_config_tokens(tokens: Sequence[str]) -> tuple[str, str, int, str]:
     cleaned = [token.strip() for token in tokens if token and token.strip()]
     if not cleaned:
         raise ValueError("missing wifi configuration tokens")
@@ -476,6 +483,17 @@ def _parse_wifi_config_tokens(tokens: Sequence[str]) -> tuple[str, str, int]:
         raise ValueError("password value is missing")
 
     tail_lowered = [token.lower() for token in tail_tokens]
+    connection_mode = "wifi"
+    if "mode" in tail_lowered:
+        mode_idx = tail_lowered.index("mode")
+        if mode_idx + 1 >= len(tail_tokens):
+            raise ValueError("mode value is missing")
+        connection_mode = tail_tokens[mode_idx + 1].strip().lower()
+        if connection_mode not in {"wifi", "wired"}:
+            raise ValueError("mode must be one of: wifi, wired")
+        tail_tokens = tail_tokens[:mode_idx]
+        tail_lowered = [token.lower() for token in tail_tokens]
+
     port = DEFAULT_SERVER_PORT
     if "port" in tail_lowered:
         port_idx = tail_lowered.index("port")
@@ -496,7 +514,7 @@ def _parse_wifi_config_tokens(tokens: Sequence[str]) -> tuple[str, str, int]:
     if not password:
         raise ValueError("password value is missing")
 
-    return ssid, password, port
+    return ssid, password, port, connection_mode
 
 
 def _cmd_start(port: Optional[int]) -> int:
@@ -523,18 +541,18 @@ def _cmd_start(port: Optional[int]) -> int:
 
 def _cmd_config_wifi(tokens: Sequence[str]) -> int:
     try:
-        ssid, password, port = _parse_wifi_config_tokens(tokens)
+        ssid, password, port, connection_mode = _parse_wifi_config_tokens(tokens)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         print(
-            "usage: ccoli config wifi <WiFi Name> password <password> port <port>",
+            "usage: ccoli config wifi <WiFi Name> password <password> port <port> [mode wifi|wired]",
             file=sys.stderr,
         )
         return 2
 
     root = _repo_root()
-    config_path = _update_server_port(root, port)
-    secrets_path = _write_device_secrets(root, ssid, password, port)
+    config_path = _update_server_connection(root, port, connection_mode)
+    secrets_path = _write_device_secrets(root, ssid, password, port, connection_mode=connection_mode)
 
     print(f"updated: {config_path}")
     print(f"updated: {secrets_path}")
@@ -583,11 +601,11 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser = subparsers.add_parser("config", help="configure ccoli project settings")
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
 
-    wifi_parser = config_subparsers.add_parser("wifi", help="set wifi/password/port for ESP32 + server")
+    wifi_parser = config_subparsers.add_parser("wifi", help="set wifi/password/port/mode for ESP32 + server")
     wifi_parser.add_argument(
         "tokens",
         nargs=argparse.REMAINDER,
-        help="syntax: <WiFi Name> password <password> port <port>",
+        help="syntax: <WiFi Name> password <password> port <port> [mode wifi|wired]",
     )
 
     llm_parser = config_subparsers.add_parser("llm", help="set LLM provider/model/API key")

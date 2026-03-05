@@ -19,3 +19,11 @@ colli = "ccoli.cli:main"
 
 [tool.setuptools]
 packages = ["ccoli"]
+
+
+[tool.pytest.ini_options]
+markers = [
+  "telegram: telegram channel tests",
+  "channel: channel integration tests",
+  "protocol: protocol regression tests"
+]

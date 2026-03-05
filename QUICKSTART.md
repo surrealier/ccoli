@@ -10,7 +10,7 @@ pip install -e .
 ## 2. Configure project (official command)
 
 ```bash
-ccoli config wifi <WiFi Name> password <password> port <port>
+ccoli config wifi <WiFi Name> password <password> port <port> [mode wifi|wired]
 ```
 
 Example:
@@ -80,3 +80,10 @@ If local Docker is not available, run the same pipeline in GitHub Actions:
 
 - Workflow file: `.github/workflows/docker-tests.yml`
 - Trigger manually from Actions tab using `workflow_dispatch`
+
+
+## Ralph PoC evaluation
+
+```bash
+python scripts/evaluate_poc.py --tool ralph
+```

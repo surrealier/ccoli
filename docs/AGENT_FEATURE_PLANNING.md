@@ -38,9 +38,9 @@
 > 상태 정의: `TODO` / `DOING` / `DONE` / `BLOCKED`
 
 ### EPIC-A: PRD 중심 운영 고정화 (PRD 1~4, 10)
-- [ ] (SA-0, TODO) PRD/Planning 템플릿에 필수 섹션(배경/범위/테스트/롤백) 강제
-- [ ] (SA-0, TODO) README/QUICKSTART에서 PRD↔Planning 링크 무결성 점검
-- [ ] (SA-0, TODO) 기능 PR 템플릿에 “PRD 항목 매핑” 체크박스 추가
+- [x] (SA-0, DONE) PRD/Planning 템플릿에 필수 섹션(배경/범위/테스트/롤백) 강제
+- [x] (SA-0, DONE) README/QUICKSTART에서 PRD↔Planning 링크 무결성 점검
+- [x] (SA-0, DONE) 기능 PR 템플릿에 “PRD 항목 매핑” 체크박스 추가
 - 검증:
   - `rg "PRD|Planning" README.md QUICKSTART.md docs/*.md`
 
@@ -54,54 +54,54 @@
 
 ### EPIC-C: 통신/회귀 테스트 확장 (PRD 6.2, 7)
 - [x] (SA-2, DONE) `client-sim` 컨테이너 추가 및 server와 프로토콜 핸드셰이크 검증
-- [ ] (SA-2, TODO) 회귀 시나리오 3종(정상, 지연/재시도, 비정상 payload) 자동화
-- [ ] (SA-2, TODO) 외부 API mock-services 템플릿 추가
-- [ ] (SA-2, TODO) 통신 실패 사용자 안내 메시지 회귀 테스트화
+- [x] (SA-2, DONE) 회귀 시나리오 3종(정상, 지연/재시도, 비정상 payload) 자동화
+- [x] (SA-2, DONE) 외부 API mock-services 템플릿 추가
+- [x] (SA-2, DONE) 통신 실패 사용자 안내 메시지 회귀 테스트화
 - 검증:
   - `docker compose -f docker/docker-compose.test.yml run --rm client-sim`
   - `docker compose -f docker/docker-compose.test.yml run --rm server-test pytest -m protocol`
 
 ### EPIC-D: 연결/설정 UX 개선 (PRD 5.1)
-- [ ] (SA-3, TODO) `server/config.yaml` 연결 모드 스키마(`wifi|wired`) 확장
-- [ ] (SA-3, TODO) `ccoli config wifi ...`를 연결 모드 지원 CLI로 리팩터링
-- [ ] (SA-3, TODO) firmware `device_secrets.h`와 키 이름/의미 1:1 동기화
-- [ ] (SA-3, TODO) 설정 검증 에러를 행동 유도형 메시지로 통일
+- [x] (SA-3, DONE) `server/config.yaml` 연결 모드 스키마(`wifi|wired`) 확장
+- [x] (SA-3, DONE) `ccoli config wifi ...`를 연결 모드 지원 CLI로 리팩터링
+- [x] (SA-3, DONE) firmware `device_secrets.h`와 키 이름/의미 1:1 동기화
+- [x] (SA-3, DONE) 설정 검증 에러를 행동 유도형 메시지로 통일
 - 검증:
   - `pytest server/tests/test_cli_integration.py -k config`
   - `pytest server/tests/test_connection.py`
 
 ### EPIC-E: Integration 품질 고도화 (PRD 5.2)
-- [ ] (SA-4, TODO) 연동 공통 인터페이스(타임아웃/재시도/오류코드) 표준화
-- [ ] (SA-4, TODO) Weather/Search/Calendar/Notify/Maps 헬스체크 일관화
-- [ ] (SA-4, TODO) 연동 실패 시 사용자용 TTS 메시지 + 내부 디버그 로그 분리
-- [ ] (SA-4, TODO) 통합별 실패 케이스 테스트 추가
+- [x] (SA-4, DONE) 연동 공통 인터페이스(타임아웃/재시도/오류코드) 표준화
+- [x] (SA-4, DONE) Weather/Search/Calendar/Notify/Maps 헬스체크 일관화
+- [x] (SA-4, DONE) 연동 실패 시 사용자용 TTS 메시지 + 내부 디버그 로그 분리
+- [x] (SA-4, DONE) 통합별 실패 케이스 테스트 추가
 - 검증:
   - `pytest server/tests/test_integrations_extended.py`
   - `pytest server/tests/test_integration_error_tts.py`
 
 ### EPIC-F: Voice ID/개인화 안정화 (PRD 5.3)
-- [ ] (SA-5, TODO) 등록/식별/삭제/threshold 조정 플로우 통합
-- [ ] (SA-5, TODO) Voice ID ON/OFF 상태 기반 응답 게이트 고도화
-- [ ] (SA-5, TODO) 사용자별 메모리 컨텍스트 분리 정책 반영
-- [ ] (SA-5, TODO) CLI/음성 명령 동작 일치 테스트 추가
+- [x] (SA-5, DONE) 등록/식별/삭제/threshold 조정 플로우 통합
+- [x] (SA-5, DONE) Voice ID ON/OFF 상태 기반 응답 게이트 고도화
+- [x] (SA-5, DONE) 사용자별 메모리 컨텍스트 분리 정책 반영
+- [x] (SA-5, DONE) CLI/음성 명령 동작 일치 테스트 추가
 - 검증:
   - `pytest server/tests/test_voice_id_service.py`
   - `pytest server/tests/test_voice_store.py`
 
 ### EPIC-G: iOS 채널 확장 (PRD 5.4)
-- [ ] (SA-6, TODO) Telegram bot 기반 채팅 MVP(메시지 수신/LLM 응답/전송) 구현
-- [ ] (SA-6, TODO) 인증/레이트리밋/오류 응답 정책 수립
-- [ ] (SA-6, TODO) 운영/배포 가이드(토큰 보안, 장애 대응) 문서화
-- [ ] (SA-6, TODO) 향후 iOS 앱 연동을 위한 인터페이스 추상화
+- [x] (SA-6, DONE) Telegram bot 기반 채팅 MVP(메시지 수신/LLM 응답/전송) 구현
+- [x] (SA-6, DONE) 인증/레이트리밋/오류 응답 정책 수립
+- [x] (SA-6, DONE) 운영/배포 가이드(토큰 보안, 장애 대응) 문서화
+- [x] (SA-6, DONE) 향후 iOS 앱 연동을 위한 인터페이스 추상화
 - 검증:
   - `pytest -m telegram`
   - `docker compose -f docker/docker-compose.test.yml run --rm server-test pytest -m channel`
 
 ### EPIC-H: 도구 PoC (PRD 5.5)
-- [ ] (SA-7, TODO) Ralph 적용 후보 선정(문서 lint, 테스트 리포트 자동화)
-- [ ] (SA-7, TODO) 보안/비용/충돌/유지보수 평가표 작성
-- [ ] (SA-7, TODO) 단계적 도입안(실험→부분 적용→확장) 수립
-- [ ] (SA-7, TODO) 적용/비적용 비교 리포트 제출
+- [x] (SA-7, DONE) Ralph 적용 후보 선정(문서 lint, 테스트 리포트 자동화)
+- [x] (SA-7, DONE) 보안/비용/충돌/유지보수 평가표 작성
+- [x] (SA-7, DONE) 단계적 도입안(실험→부분 적용→확장) 수립
+- [x] (SA-7, DONE) 적용/비적용 비교 리포트 제출
 - 검증:
   - `python scripts/evaluate_poc.py --tool ralph`
 

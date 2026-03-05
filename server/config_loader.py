@@ -69,6 +69,7 @@ class Config:
             "log_dir": "logs"
         },
         "connection": {
+            "mode": "wifi",
             "socket_timeout": 0.5
         },
         "queue": {
