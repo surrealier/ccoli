@@ -180,6 +180,25 @@ Use:
 
 Make sure `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` exists before build/upload.
 
+## Docker Compose Test Entrypoint
+
+Use a single test entrypoint for reproducible server/client checks:
+
+```bash
+docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test
+```
+
+Optional helper script:
+
+```bash
+./scripts/run_docker_tests.sh
+```
+
+If Docker is unavailable in your local machine, run the same test stack on the GitHub Actions runner:
+
+- Workflow: `.github/workflows/docker-tests.yml`
+- Triggers: `pull_request`, `push(main)`, `workflow_dispatch`
+
 ## CLI Commands
 
 - `ccoli start`

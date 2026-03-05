@@ -59,3 +59,22 @@ Required file before build:
 
 - Product requirements: `docs/PRD.md`
 - Execution planning: `docs/AGENT_FEATURE_PLANNING.md`
+
+## Docker test entrypoint
+
+Run the standardized test stack with Docker Compose:
+
+```bash
+docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test
+```
+
+Convenience wrapper:
+
+```bash
+./scripts/run_docker_tests.sh
+```
+
+If local Docker is not available, run the same pipeline in GitHub Actions:
+
+- Workflow file: `.github/workflows/docker-tests.yml`
+- Trigger manually from Actions tab using `workflow_dispatch`
