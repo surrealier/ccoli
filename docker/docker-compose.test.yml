@@ -7,15 +7,7 @@ services:
       dockerfile: docker/Dockerfile.test
     working_dir: /app
     command: >-
-      pytest
-      server/tests/test_protocol.py
-      server/tests/test_connection.py
-      server/tests/test_cli_integration.py
-      server/tests/test_integrations.py
-      server/tests/test_integrations_extended.py
-      server/tests/test_integration_error_tts.py
-      server/tests/test_voice_store.py
-      server/tests/test_voice_id_service.py
+      pytest server/tests
     environment:
       - PYTHONPATH=/app/server
 

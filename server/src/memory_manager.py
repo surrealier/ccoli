@@ -192,11 +192,14 @@ class MemoryManager:
         """기존 md 내용에 새 정보를 중복 없이 추가"""
         old_lower = old_content.lower()
         additions = []
+        seen = set()
         for line in new_lines:
             # (아직 모름) 자리를 대체하거나, 중복이 아니면 추가
             core = line.lstrip("- ").strip()
-            if core.lower() not in old_lower and core:
+            core_lower = core.lower()
+            if core and core_lower not in old_lower and core_lower not in seen:
                 additions.append(f"- {core}")
+                seen.add(core_lower)
 
         if not additions:
             return old_content

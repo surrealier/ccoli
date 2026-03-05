@@ -68,6 +68,8 @@ Run the standardized test stack with Docker Compose:
 docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test
 ```
 
+`server-test` 컨테이너는 `server/tests` 전체를 실행해 모듈 단위 테스트, 통합 테스트, CLI 테스트, 시나리오 테스트를 한 번에 검증합니다.
+
 Convenience wrapper:
 
 ```bash

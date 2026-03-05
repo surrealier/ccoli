@@ -188,6 +188,8 @@ Use a single test entrypoint for reproducible server/client checks:
 docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test
 ```
 
+`server-test` 컨테이너는 `server/tests` 전체를 실행해 모듈 단위/통합/CLI/시나리오 테스트를 함께 검증합니다.
+
 Optional helper script:
 
 ```bash
