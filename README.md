@@ -210,6 +210,8 @@ Make sure `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` exists before b
 +-- docs/
 |   +-- API.md
 |   +-- PROTOCOL.md
+|   +-- PRD.md
+|   +-- AGENT_FEATURE_PLANNING.md
 |   +-- assets/
 |       +-- ccoli-logo.svg
 |       +-- ccoli-character.svg
@@ -240,6 +242,8 @@ Make sure `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` exists before b
 - Quick onboarding: `QUICKSTART.md`
 - Server module map: `docs/API.md`
 - Binary protocol details: `docs/PROTOCOL.md`
+- Product requirements (single source): `docs/PRD.md`
+- Execution planning: `docs/AGENT_FEATURE_PLANNING.md`
 
 ## License
 
