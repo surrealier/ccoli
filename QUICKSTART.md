@@ -53,3 +53,9 @@ Required file before build:
 - Agent mode: available
 - Robot mode: not available yet (Servo + Display integration in progress)
 
+
+
+## References
+
+- Product requirements: `docs/PRD.md`
+- Execution planning: `docs/AGENT_FEATURE_PLANNING.md`
