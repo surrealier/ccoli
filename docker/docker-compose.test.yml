@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  server-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    working_dir: /app
+    command: >-
+      pytest
+      server/tests/test_protocol.py
+      server/tests/test_connection.py
+      server/tests/test_cli_integration.py
+      server/tests/test_integrations.py
+      server/tests/test_integrations_extended.py
+      server/tests/test_integration_error_tts.py
+      server/tests/test_voice_store.py
+      server/tests/test_voice_id_service.py
+    environment:
+      - PYTHONPATH=/app/server
+
+  client-sim:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    working_dir: /app
+    command: python server/tests/client_sim_smoke.py
+    environment:
+      - PYTHONPATH=/app/server

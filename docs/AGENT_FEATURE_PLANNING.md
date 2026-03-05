@@ -45,15 +45,15 @@
   - `rg "PRD|Planning" README.md QUICKSTART.md docs/*.md`
 
 ### EPIC-B: Docker 테스트 표준화 (PRD 6.3, 7)
-- [ ] (SA-1, TODO) `docker/docker-compose.test.yml`를 테스트 단일 진입점으로 확정
-- [ ] (SA-1, TODO) `server-test` 컨테이너에서 unit/integration/cli smoke 명령 통합
-- [ ] (SA-1, TODO) CI에서 compose 기반 테스트만 실행하도록 파이프라인 정리
-- [ ] (SA-1, TODO) 실패 로그 아카이브(테스트 리포트 + 핵심 로그) 수집
+- [x] (SA-1, DONE) `docker/docker-compose.test.yml`를 테스트 단일 진입점으로 확정
+- [x] (SA-1, DONE) `server-test` 컨테이너에서 unit/integration/cli smoke 명령 통합
+- [x] (SA-1, DONE) CI에서 compose 기반 테스트만 실행하도록 파이프라인 정리
+- [x] (SA-1, DONE) 실패 로그 아카이브(테스트 리포트 + 핵심 로그) 수집
 - 검증:
   - `docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit`
 
 ### EPIC-C: 통신/회귀 테스트 확장 (PRD 6.2, 7)
-- [ ] (SA-2, TODO) `client-sim` 컨테이너 추가 및 server와 프로토콜 핸드셰이크 검증
+- [x] (SA-2, DONE) `client-sim` 컨테이너 추가 및 server와 프로토콜 핸드셰이크 검증
 - [ ] (SA-2, TODO) 회귀 시나리오 3종(정상, 지연/재시도, 비정상 payload) 자동화
 - [ ] (SA-2, TODO) 외부 API mock-services 템플릿 추가
 - [ ] (SA-2, TODO) 통신 실패 사용자 안내 메시지 회귀 테스트화

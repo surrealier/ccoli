@@ -1,0 +1,15 @@
+FROM python:3.10-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY server/requirements-test.txt /tmp/requirements-test.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-test.txt
+
+COPY pyproject.toml /app/pyproject.toml
+COPY ccoli /app/ccoli
+COPY server /app/server
+RUN pip install --no-cache-dir -e /app
+
+WORKDIR /app

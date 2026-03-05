@@ -1,0 +1,38 @@
+name: Docker Compose Tests
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  docker-compose-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Docker availability on runner
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Run server-test via Docker Compose
+        run: docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test | tee artifacts-compose-server-test.log
+
+      - name: Run client-sim via Docker Compose
+        run: docker compose -f docker/docker-compose.test.yml run --rm client-sim | tee artifacts-compose-client-sim.log
+
+      - name: Upload Docker test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-compose-test-logs
+          path: |
+            artifacts-compose-server-test.log
+            artifacts-compose-client-sim.log
+
+      - name: Cleanup compose resources
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down --remove-orphans
