@@ -10,7 +10,6 @@ It is built for maker-friendly local experiments with:
 - TTS (Text-to-Speech)
 - Device-side actions (voice playback today, robot actions in progress)
 
-
 ![ccoli summary](assets/summary.png)
 
 ## Project Status
@@ -24,9 +23,11 @@ Robot mode is intended for servo/display style actions and is controlled by feat
 
 ### What you need
 
-- **PC** (runs `ccoli` server and uploads firmware)
-- **Atom Echo ESP32 module**
-- Same local Wi-Fi network for both PC and Atom Echo
+| Component | Purpose |
+|-----------|---------|
+| **PC** (Windows/Mac/Linux) | Runs the `ccoli` server, handles STT/LLM/TTS |
+| **Atom Echo ESP32 module** | Captures voice input and plays audio responses |
+| **Same local Wi-Fi network** | Connects the PC and Atom Echo |
 
 ```text
 [PC]
@@ -70,17 +71,17 @@ flowchart LR
 
 ## Quick Start
 
-### 1) Install dependencies
+### Step 1. Install dependencies
 
 ```bash
 pip install -r server/requirements.txt
 pip install -e .
 ```
 
-### 2) Configure Wi-Fi, password, and port
+### Step 2. Configure Wi-Fi and server port
 
 ```bash
-ccoli config wifi <WiFi Name> password <password> port <port> [mode wifi|wired]
+ccoli config wifi <SSID> password <PASSWORD> port <PORT> [mode wifi|wired]
 ```
 
 Example:
@@ -89,33 +90,31 @@ Example:
 ccoli config wifi MyHomeWiFi password MySecretPass port 5001
 ```
 
-Compatibility alias is also supported:
+This updates both `server/config.yaml` and `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` automatically.
 
-```bash
-colli config wifi MyHomeWiFi password MySecretPass port 5001
-```
+Then set `SERVER_IP` in `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` to your PC's local IP address.
 
-This command updates:
-- `server/config.yaml` (`server.port`)
-- `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` (`SSID`, `PASS`, `SERVER_PORT`)
+### Step 3. Flash Atom Echo firmware
 
-Then set `SERVER_IP` in `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` to your PC IP.
+Open the sketch below in Arduino IDE (or use Arduino CLI) and upload to your Atom Echo:
 
-### 3) Start server
+- `arduino/atom_echo_m5stack_esp32_ino/atom_echo_m5stack_esp32_ino.ino`
+
+Make sure `device_secrets.h` exists in the same directory before building.
+
+### Step 4. Start the server
 
 ```bash
 ccoli start
 ```
 
-Optional port override for one run:
+That's it — speak to the Atom Echo and the server will respond with voice.
 
-```bash
-ccoli start --port 5002
-```
+## Optional Configuration
 
-### 3-1) Configure LLM provider (Ollama/Gemini/Claude/ChatGPT)
+### LLM provider (Ollama / Gemini / Claude / ChatGPT)
 
-Default provider is Ollama. You can switch provider and model from CLI:
+Default provider is Ollama (runs locally, no API key needed). Switch provider and model from CLI:
 
 ```bash
 ccoli config llm --provider ollama --model qwen3:8b
@@ -124,24 +123,20 @@ ccoli config llm --provider claude --model claude-3-5-haiku-latest --api-key <AN
 ccoli config llm --provider chatgpt --model gpt-4o-mini --api-key <OPENAI_API_KEY>
 ```
 
-When Ollama is selected, `ccoli` automatically:
-- installs Ollama if missing,
-- starts Ollama server,
-- pulls the selected model.
+When Ollama is selected, `ccoli` automatically installs Ollama if missing, starts the server, and pulls the selected model.
 
-
-### 3-2) Configure integrations (weather/search/calendar/notify/maps)
+### Integrations (weather / search / calendar / notify / maps)
 
 ```bash
-# 상태 확인
+# List all integrations and their status
 ccoli config integration list
 
-# 날씨 키 등록/검증
+# Set up weather integration
 ccoli config integration set weather --api-key <WEATHER_API_KEY>
 ccoli config integration enable weather
 ccoli config integration test weather
 
-# Google Calendar 필수 값 등록
+# Set up Google Calendar integration
 ccoli config integration set calendar-google \
   --client-id <GOOGLE_CLIENT_ID> \
   --client-secret <GOOGLE_CLIENT_SECRET> \
@@ -149,49 +144,45 @@ ccoli config integration set calendar-google \
 ccoli config integration test calendar-google
 ```
 
-Failure example:
+If a required key is missing, the test command will tell you exactly what to set:
 
 ```bash
 $ ccoli config integration test weather
 error: missing env key `WEATHER_API_KEY`. run `ccoli config integration set weather --api-key ...`
 ```
 
-### 3-3) Voice ID control (CLI helper)
+### Voice ID
+
+Manage speaker recognition from CLI:
 
 ```bash
 ccoli config voice-id status
 ccoli config voice-id enable
 ccoli config voice-id threshold --value 0.72
-ccoli config voice-id delete --user 홍길동
+ccoli config voice-id delete --user <USERNAME>
 ccoli config voice-id disable
 ```
 
-
-Voice command examples for runtime Voice ID:
+You can also control Voice ID at runtime via voice commands:
 
 ```text
-@@홍길동 목소리 등록
-@@화자 인식 켜
-@@홍길동 목소리 삭제
-@@화자 인식 꺼
+@@<USERNAME> register voice
+@@enable voice recognition
+@@<USERNAME> delete voice
+@@disable voice recognition
 ```
 
-### 4) Flash Atom Echo firmware
+## Testing
 
-Use:
-- `arduino/atom_echo_m5stack_esp32_ino/atom_echo_m5stack_esp32_ino.ino`
+### Docker (recommended)
 
-Make sure `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` exists before build/upload.
-
-## Docker Compose Test Entrypoint
-
-Use a single test entrypoint for reproducible server/client checks:
+Run the full test suite in a reproducible Docker environment:
 
 ```bash
 docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test
 ```
 
-`server-test` 컨테이너는 `server/tests` 전체를 실행해 모듈 단위/통합/CLI/시나리오 테스트를 함께 검증합니다.
+The `server-test` container runs all unit, integration, CLI, and scenario tests from `server/tests`.
 
 Optional helper script:
 
@@ -199,25 +190,23 @@ Optional helper script:
 ./scripts/run_docker_tests.sh
 ```
 
-If Docker is unavailable in your local machine, run the same test stack on the GitHub Actions runner:
+### CI (GitHub Actions)
+
+If Docker is unavailable locally, the same tests run on GitHub Actions:
 
 - Workflow: `.github/workflows/docker-tests.yml`
 - Triggers: `pull_request`, `push(main)`, `workflow_dispatch`
 
 ## CLI Commands
 
-- `ccoli start`
-  - Starts `server/server.py`
-- `ccoli start --port 5002`
-  - Temporary port override for one run
-- `ccoli config wifi <WiFi Name> password <password> port <port> [mode wifi|wired]`
-  - Applies Wi-Fi/password/port to server + firmware secrets
-- `ccoli config llm --provider <ollama|gemini|claude|chatgpt> [--model <name>] [--api-key <key>]`
-  - Applies LLM provider settings and writes API key to `server/.env` for cloud providers
-- `ccoli config integration <list|set|enable|disable|test> ...`
-  - Manages feature integration credentials and validation
-- `ccoli config voice-id <status|enable|disable|delete|threshold> ...`
-  - Controls Voice ID feature flags and stored profile cleanup
+| Command | Description |
+|---------|-------------|
+| `ccoli start` | Start the server |
+| `ccoli start --port 5002` | Start with a temporary port override |
+| `ccoli config wifi <SSID> password <PASS> port <PORT>` | Configure Wi-Fi/port for server + firmware |
+| `ccoli config llm --provider <name> [--model <m>] [--api-key <k>]` | Set LLM provider and model |
+| `ccoli config integration <list\|set\|enable\|disable\|test> ...` | Manage integration credentials |
+| `ccoli config voice-id <status\|enable\|disable\|delete\|threshold> ...` | Manage Voice ID settings |
 
 ## Repository Layout
 
@@ -251,39 +240,31 @@ If Docker is unavailable in your local machine, run the same test stack on the G
 - Server defaults: `server/config.yaml`
 - Environment overrides: `server/.env` (see `server/env.example`)
 - Robot mode feature gate:
-  - `server/config.yaml` -> `features.robot_mode_enabled`
+  - `server/config.yaml` → `features.robot_mode_enabled`
   - default: `false`
 
 ## Security Notes
 
 - Never commit real credentials in firmware files.
-- Store local secrets in:
-  - `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h`
-- This file is git-ignored by default.
+- Store local secrets in `arduino/atom_echo_m5stack_esp32_ino/device_secrets.h` (git-ignored by default).
 
 ## Documentation
 
 - Quick onboarding: `QUICKSTART.md`
 - Server module map: `docs/API.md`
 - Binary protocol details: `docs/PROTOCOL.md`
-- Product requirements (single source): `docs/PRD.md`
+- Product requirements: `docs/PRD.md`
 - Execution planning: `docs/AGENT_FEATURE_PLANNING.md`
-
 
 ## Codex Superpowers Setup
 
-이 프로젝트는 [obra/superpowers](https://github.com/obra/superpowers) 워크플로우를 사용합니다.
-Codex는 `~/.agents/skills/`에서 스킬을 자동 발견하므로, 아래 스크립트로 설치하세요:
+This project uses the [obra/superpowers](https://github.com/obra/superpowers) workflow. Codex auto-discovers skills from `~/.agents/skills/`. Install with:
 
 ```bash
 ./scripts/setup_codex_superpowers.sh
 ```
 
-설치 후 Codex를 재시작하면 TDD, brainstorming, writing-plans 등의 스킬이 자동 적용됩니다.
-## License
-
-CC BY-NC 4.0. Commercial use requires prior written permission. See `LICENSE`.
-
+After installation, restart Codex to activate TDD, brainstorming, writing-plans, and other skills.
 
 ## Planning/PRD Templates
 
@@ -291,12 +272,16 @@ CC BY-NC 4.0. Commercial use requires prior written permission. See `LICENSE`.
 - Planning template: `docs/PLANNING_TEMPLATE.md`
 - Feature planning board: `docs/AGENT_FEATURE_PLANNING.md`
 
-## Mock Services Template
+## Mock Services
 
 ```bash
 docker compose -f docker/docker-compose.mock-services.yml up
 ```
 
-## Telegram Channel MVP
+## Telegram Channel
 
-운영 가이드: `docs/TELEGRAM_CHANNEL_GUIDE.md`
+Operations guide: `docs/TELEGRAM_CHANNEL_GUIDE.md`
+
+## License
+
+CC BY-NC 4.0. Commercial use requires prior written permission. See `LICENSE`.
