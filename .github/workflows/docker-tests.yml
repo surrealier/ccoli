@@ -3,7 +3,7 @@ name: Docker Compose Tests
 on:
   pull_request:
   push:
-    branches: [ main ]
+    branches: [ main, 'codex/**', 'feature/**' ]
   workflow_dispatch:
 
 jobs:
