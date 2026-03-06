@@ -19,3 +19,9 @@ services:
     command: python server/tests/client_sim_smoke.py
     environment:
       - PYTHONPATH=/app/server
+
+  firmware-build:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.firmware
+    command: arduino-cli compile --fqbn m5stack:esp32:m5stack_atom /workspace/firmware

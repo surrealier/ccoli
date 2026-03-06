@@ -24,6 +24,9 @@ jobs:
       - name: Run client-sim via Docker Compose
         run: docker compose -f docker/docker-compose.test.yml run --rm client-sim | tee artifacts-compose-client-sim.log
 
+      - name: Run firmware compile check
+        run: docker compose -f docker/docker-compose.test.yml run --rm firmware-build | tee artifacts-firmware-build.log
+
       - name: Upload Docker test logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -32,6 +35,7 @@ jobs:
           path: |
             artifacts-compose-server-test.log
             artifacts-compose-client-sim.log
+            artifacts-firmware-build.log
 
       - name: Cleanup compose resources
         if: always()
