@@ -266,6 +266,17 @@ If Docker is unavailable in your local machine, run the same test stack on the G
 - Product requirements (single source): `docs/PRD.md`
 - Execution planning: `docs/AGENT_FEATURE_PLANNING.md`
 
+
+## Codex Superpowers Setup
+
+이 프로젝트는 [obra/superpowers](https://github.com/obra/superpowers) 워크플로우를 사용합니다.
+Codex는 `~/.agents/skills/`에서 스킬을 자동 발견하므로, 아래 스크립트로 설치하세요:
+
+```bash
+./scripts/setup_codex_superpowers.sh
+```
+
+설치 후 Codex를 재시작하면 TDD, brainstorming, writing-plans 등의 스킬이 자동 적용됩니다.
 ## License
 
 MIT. See `LICENSE`.
