@@ -1,6 +1,6 @@
 # ccoli
 
-![ccoli logo](docs/assets/ccoli-logo.svg)
+![ccoli logo](assets/ccoli.png)
 
 `ccoli` is a voice-first Arduino + Python assistant that lets you talk to an **Atom Echo ESP32** device and have a **PC-hosted server** handle speech, reasoning, and responses.
 
@@ -16,6 +16,8 @@ It is built for maker-friendly local experiments with:
 - **Robot mode**: In development
 
 Robot mode is intended for servo/display style actions and is controlled by feature flags in server config.
+
+![ccoli summary](assets/summary.png)
 
 ## At a Glance
 
@@ -279,7 +281,7 @@ Codex는 `~/.agents/skills/`에서 스킬을 자동 발견하므로, 아래 스�
 설치 후 Codex를 재시작하면 TDD, brainstorming, writing-plans 등의 스킬이 자동 적용됩니다.
 ## License
 
-MIT. See `LICENSE`.
+CC BY-NC 4.0. Commercial use requires prior written permission. See `LICENSE`.
 
 
 ## Planning/PRD Templates
