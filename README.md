@@ -10,14 +10,15 @@ It is built for maker-friendly local experiments with:
 - TTS (Text-to-Speech)
 - Device-side actions (voice playback today, robot actions in progress)
 
+
+![ccoli summary](assets/summary.png)
+
 ## Project Status
 
 - **Agent mode**: Available now
 - **Robot mode**: In development
 
 Robot mode is intended for servo/display style actions and is controlled by feature flags in server config.
-
-![ccoli summary](assets/summary.png)
 
 ## At a Glance
 
