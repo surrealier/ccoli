@@ -13,11 +13,26 @@ extern const char* PASS;
 extern const char* SERVER_IP;
 extern const uint16_t SERVER_PORT;
 
-// Servo settings
-#define SERVO_PIN 25
+// ── Pin assignments (Atom Echo) ──
+// Predefined (DO NOT REUSE): G19, G22 (I2S SPK), G23, G33 (PDM MIC)
+// Internal: G27 (RGB LED), G39 (Button), G12 (IR TX)
+
+// OLED Display (SSD1306 I2C) — right-side header pins
+#define DISPLAY_SDA_PIN 25
+#define DISPLAY_SCL_PIN 21
+#define DISPLAY_WIDTH   128
+#define DISPLAY_HEIGHT  64
+#define DISPLAY_I2C_ADDR 0x3C
+
+// Servo motors — Grove HY2.0-4P port
+#define SERVO_PIN_PITCH 26   // Servo #1: nod (up/down)
+#define SERVO_PIN_TILT  32   // Servo #2: tilt (left/right)
 #define SERVO_MIN_ANGLE 0
 #define SERVO_MAX_ANGLE 180
 #define SERVO_CENTER_ANGLE 90
+
+// Backward compat alias
+#define SERVO_PIN SERVO_PIN_PITCH
 
 // VAD (Voice Activity Detection) settings
 #define VAD_NOISE_ALPHA 0.995f
@@ -58,5 +73,13 @@ extern const uint16_t SERVER_PORT;
 
 // Protocol receive safety cap (bytes)
 #define RX_AUDIO_MAX_ALLOC 16384
+
+// Idle animation settings
+#define IDLE_BLINK_MIN_MS 3000
+#define IDLE_BLINK_MAX_MS 5000
+#define IDLE_GAZE_INTERVAL_MS 8000
+
+// Emotion decay
+#define EMOTION_DECAY_INTERVAL_MS 30000
 
 #endif  // CONFIG_H

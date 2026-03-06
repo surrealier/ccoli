@@ -112,7 +112,9 @@ void setup() {
 
   // Initialize LED -> indicate connecting (red)
   led_init();
-  servo_init(SERVO_PIN);
+  servo_init();
+  display_init();
+  display_show_face(FACE_NEUTRAL);
   led_set_color(LED_COLOR_CONNECTING_R, LED_COLOR_CONNECTING_G, LED_COLOR_CONNECTING_B);
 
   // Start WiFi connection (async; state tracked in connection_manage)
@@ -247,7 +249,8 @@ void loop() {
   }
 
   // -- Peripheral updates --
-  led_update_pattern();  // LED animation pattern (currently placeholder)
+  led_update_pattern();  // LED animation pattern
+  display_update();      // OLED face animation + blink (currently placeholder)
   servo_update();        // Servo async action (rotate/wiggle) step processing
   delay(1);              // Feed watchdog + yield CPU
 }

@@ -15,6 +15,19 @@ SERVO_MIN = 0
 SERVO_MAX = 180
 DEFAULT_ANGLE_CENTER = 90
 
+EMOTION_MAP = {
+    "neutral": {"face": "neutral", "action": "none", "led": [255, 255, 255]},
+    "happy": {"face": "happy", "action": "bounce_happy", "led": [255, 200, 0]},
+    "sad": {"face": "sad", "action": "droop_sad", "led": [0, 100, 255]},
+    "angry": {"face": "angry", "action": "shake_angry", "led": [255, 0, 0]},
+    "surprised": {"face": "surprised", "action": "startle", "led": [255, 255, 255]},
+    "sleepy": {"face": "sleepy", "action": "sleep_drift", "led": [80, 0, 120]},
+    "love": {"face": "love", "action": "nod_yes", "led": [255, 100, 150]},
+    "curious": {"face": "curious", "action": "tilt_curious", "led": [0, 200, 100]},
+    "excited": {"face": "excited", "action": "dance", "led": [255, 50, 200]},
+    "confused": {"face": "confused", "action": "wiggle", "led": [255, 150, 0]},
+}
+
 
 class RobotMode:
     """로봇 모드 메인 클래스 - 음성 명령을 로봇 동작으로 변환"""
@@ -101,3 +114,58 @@ class RobotMode:
                 pass
 
         return {"action": "NOOP"}
+
+    def build_robot_payload(self, emotion: str, text: str = "") -> dict:
+        mapping = EMOTION_MAP.get(emotion, EMOTION_MAP["neutral"])
+        return {
+            "action": "ROBOT_EMOTION",
+            "emotion": emotion,
+            "face": mapping["face"],
+            "servo_action": mapping["action"],
+            "led_color": mapping["led"],
+            "display_text": text[:20] if text else "",
+            "meaningful": True,
+        }
+
+    def extract_emotion(self, text: str) -> str:
+        match = re.search(r'\[emotion:(\w+)\]', text)
+        if match:
+            emotion = match.group(1)
+            if emotion in EMOTION_MAP:
+                return emotion
+        return "neutral"
+
+    def process_emotion_response(self, text: str) -> tuple[str, str, dict]:
+        emotion = self.extract_emotion(text)
+        clean_text = re.sub(r'\[emotion:\w+\]', '', text).strip()
+        payload = self.build_robot_payload(emotion, clean_text)
+        return clean_text, emotion, payload
+
+    def generate_emotion_response(self, user_text: str) -> tuple[str, str, dict]:
+        """LLM에 감정 태그 포함 응답을 요청하고, 감정+페이로드를 반환."""
+        if not self.llm or not (user_text or "").strip():
+            return "", "neutral", self.build_robot_payload("neutral")
+
+        emotions_list = ", ".join(EMOTION_MAP.keys())
+        system_prompt = (
+            "당신은 감정이 풍부한 로봇 펫 '꼴리'입니다.\n"
+            "사용자에게 짧고 귀엽게 대답하세요 (1-2문장).\n"
+            "반드시 응답 맨 앞에 감정 태그를 붙이세요.\n\n"
+            f"사용 가능한 감정: {emotions_list}\n"
+            "형식: [emotion:감정] 응답 텍스트\n"
+            "예시: [emotion:happy] 안녕! 만나서 반가워!\n"
+            "예시: [emotion:curious] 오, 그게 뭐야? 궁금해!"
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ]
+        try:
+            response = self.llm.chat(messages, temperature=0.7, max_tokens=100, think=False)
+            clean_text, emotion, payload = self.process_emotion_response(response)
+            if not clean_text:
+                clean_text = response
+            return clean_text, emotion, payload
+        except Exception as exc:
+            log.error("Emotion response failed: %s", exc)
+            return user_text, "neutral", self.build_robot_payload("neutral")

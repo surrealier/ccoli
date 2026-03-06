@@ -30,6 +30,29 @@ assistant:
 features:
   robot_mode_enabled: false
 
+robot:
+  servo:
+    pin_pitch: 26
+    pin_tilt: 32
+    angle_min: 0
+    angle_max: 180
+    default_angle: 90
+  display:
+    type: "ssd1306"
+    width: 128
+    height: 64
+    i2c_scl: 21
+    i2c_sda: 25
+    i2c_addr: "0x3C"
+  idle:
+    blink_interval_min: 3000
+    blink_interval_max: 5000
+    gaze_interval: 8000
+  emotion:
+    default: "neutral"
+    decay_to_neutral: true
+    decay_interval: 30
+
 memory:
   refresh_interval: 5
   memory_dir: "memory"

@@ -15,6 +15,7 @@
 #include "config.h"
 #include "led_control.h"
 #include "servo_control.h"
+#include "display_control.h"
 #include <M5Unified.h>
 #include <ctype.h>
 #include <string.h>
@@ -226,6 +227,35 @@ static void handleAudioOut(const uint8_t* payload, uint16_t len) {
   }
 }
 
+// ── Helper functions for ROBOT_EMOTION ──
+static FaceType face_from_string(const char* face) {
+  if (!face) return FACE_NEUTRAL;
+  if (strcmp(face, "happy") == 0) return FACE_HAPPY;
+  if (strcmp(face, "sad") == 0) return FACE_SAD;
+  if (strcmp(face, "angry") == 0) return FACE_ANGRY;
+  if (strcmp(face, "surprised") == 0) return FACE_SURPRISED;
+  if (strcmp(face, "sleepy") == 0) return FACE_SLEEPY;
+  if (strcmp(face, "love") == 0) return FACE_LOVE;
+  if (strcmp(face, "curious") == 0) return FACE_CURIOUS;
+  if (strcmp(face, "excited") == 0) return FACE_EXCITED;
+  if (strcmp(face, "confused") == 0) return FACE_CONFUSED;
+  return FACE_NEUTRAL;
+}
+
+static ServoAction action_from_string(const char* action) {
+  if (!action) return ACTION_NONE;
+  if (strcmp(action, "nod_yes") == 0) return ACTION_NOD_YES;
+  if (strcmp(action, "nod_no") == 0) return ACTION_NOD_NO;
+  if (strcmp(action, "tilt_curious") == 0) return ACTION_TILT_CURIOUS;
+  if (strcmp(action, "bounce_happy") == 0) return ACTION_BOUNCE_HAPPY;
+  if (strcmp(action, "droop_sad") == 0) return ACTION_DROOP_SAD;
+  if (strcmp(action, "shake_angry") == 0) return ACTION_SHAKE_ANGRY;
+  if (strcmp(action, "startle") == 0) return ACTION_STARTLE;
+  if (strcmp(action, "dance") == 0) return ACTION_DANCE;
+  if (strcmp(action, "sleep_drift") == 0) return ACTION_SLEEP_DRIFT;
+  if (strcmp(action, "wiggle") == 0) return ACTION_WIGGLE;
+  return ACTION_NONE;
+}
 // handleCmdJson — CMD(0x11) 패킷 처리
 // 서버가 보내는 JSON 명령을 파싱하여 서보/LED 동작 실행.
 // JSON 형식: {"action":"...", "angle":N, "emotion":"...", "servo_action":"...",
@@ -251,6 +281,23 @@ static void handleCmdJson(const uint8_t* payload, uint16_t len) {
   json_get_string(json, "emotion", emotion, sizeof(emotion));
   json_get_string(json, "servo_action", servo_action, sizeof(servo_action));
 
+  // ── ROBOT_EMOTION: display face + servo action + LED ──
+  if (has_action && strcmp(action, "ROBOT_EMOTION") == 0) {
+    char face[32] = {0};
+    char display_text[32] = {0};
+    json_get_string(json, "face", face, sizeof(face));
+    json_get_string(json, "servo_action", servo_action, sizeof(servo_action));
+    json_get_string(json, "display_text", display_text, sizeof(display_text));
+    
+    display_show_face(face_from_string(face));
+    if (display_text[0]) display_set_status_text(display_text);
+    
+    ServoAction sa = action_from_string(servo_action);
+    if (sa != ACTION_NONE) servo_play_action(sa);
+    
+    led_show_emotion(emotion);
+    return;
+  }
   // ── EMOTION 액션: LED 색상 + 서보 제스처 ──
   if (has_action && strcmp(action, "EMOTION") == 0) {
     led_show_emotion(emotion);

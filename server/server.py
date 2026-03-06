@@ -295,28 +295,30 @@ def handle_connection(conn, addr, stt_engine: STTEngine, config, voice_id_servic
                         send_action(conn, {"action": "NOOP", "sid": sid, "meaningful": False, "recognized": False}, send_lock)
                         continue
 
+                    # Check for mode switch intent first
                     llm_start = time.time()
                     refined_text, robot_action = robot_handler.process_with_llm(text, cur)
                     perf_logger.log_llm(time.time() - llm_start)
 
-                    if refined_text != text:
-                        log.info("LLM Refined: %s -> %s", text, refined_text)
-
-                    # If the LLM decides to switch modes
                     if robot_action.get("action") == "SWITCH_MODE":
                         _handle_mode_switch(robot_action.get("mode"))
                         continue
 
-                    action = robot_action
-                    action["sid"] = sid
-                    action["meaningful"] = action.get("action") != "NOOP"
-                    action["recognized"] = bool(text)
+                    # Generate emotion-aware response
+                    llm_start = time.time()
+                    response_text, emotion, emotion_payload = robot_handler.generate_emotion_response(text)
+                    perf_logger.log_llm(time.time() - llm_start)
+                    log.info("Robot emotion: %s, response: %s", emotion, response_text)
 
-                    if action["meaningful"] and "angle" in action:
-                        with state_lock:
-                            state["current_angle"] = action["angle"]
+                    emotion_payload["sid"] = sid
+                    emotion_payload["recognized"] = bool(text)
+                    send_action(conn, emotion_payload, send_lock)
 
-                    send_action(conn, action, send_lock)
+                    # TTS for robot response (if agent_handler available)
+                    if response_text and agent_handler:
+                        wav_bytes = agent_handler.text_to_audio(response_text)
+                        if wav_bytes:
+                            send_audio(conn, wav_bytes, send_lock)
 
                 elif current_mode == "agent":
                     if not text:
