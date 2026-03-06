@@ -50,12 +50,6 @@ Robot mode is intended for servo/display style actions and is controlled by feat
    - or control payload for robot actions (robot flow, in progress)
 7. Atom Echo executes playback and/or device action.
 
-### Project Cartoon Overview
-
-The following cartoon summarizes the end-to-end interaction flow of `ccoli` from voice input to AI processing and multimodal output:
-
-![ccoli project cartoon overview](docs/assets/ccoli-project-cartoon.png)
-
 ### Connection Diagram
 
 ```mermaid
