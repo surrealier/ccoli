@@ -16,3 +16,4 @@ error_*.log
 .cursor/
 .kiro/
 arduino/atom_echo_m5stack_esp32_ino/device_secrets.h
+server/.env
