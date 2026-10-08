@@ -193,3 +193,15 @@
 - 채널 확장 복잡도: Telegram MVP로 범위 제한 후 iOS 앱은 인터페이스 추상화 우선
 - 도구 도입 리스크: PoC 결과 기반 점진 적용, 런타임 경로 직접 치환 금지
 - 로봇 하드웨어 제약: Atom Echo 단독 핀/전원 한계를 전제로 Companion 구조를 조기에 확정하고, direct path는 레거시 fallback으로만 유지
+
+## 2026-10-08 대시보드 브랜드 아이콘 갱신
+
+사용자 요청에 따라 브로콜리 모티프는 유지하면서 얼굴·볼·겹친 음영을 제거하고, 짙은 녹색 바탕과 민트색 실루엣·음성 파형으로 단순화한다. 기존 SVG 경로를 유지해 외부 이미지 서비스나 추가 런타임 없이 사용한다.
+
+- 대상: `assets/ccoli.svg`, `server/web/static/index.html`, `server/web/static/dashboard.css`, `server/tests/test_web_dashboard_static.py`와 관련 PRD/계획 문서. favicon·상단 로고·hero에 같은 버전 쿼리를 적용하고 alt 설명을 새 심볼에 맞춘다.
+- 검증: 16/22/32/64/128px의 밝은·어두운 배경 렌더 확인, 기존 Docker 정적 UI/런타임 테스트·client-sim·CLI 스모크, 실제 HTTP의 SVG 응답과 HTML 참조 확인.
+- 롤백: 기존 SVG와 해당 HTML/CSS 변경만 복원하고 아이콘 버전 쿼리를 갱신한다. 이전 SVG는 개인 작업 산출물 `output/design/icon-refresh/icon-before.svg`에 보존했다.
+
+완료 검증: 독립 스펙 준수→디자인/코드 품질 리뷰 PASS. 위 다섯 크기의 밝은/어두운 렌더를 확인했다. 현재 HTML/CSS/SVG 세 파일만 읽기 전용 마운트한 Docker `server-test`에서 `pytest server/tests/test_web_dashboard_static.py server/tests/test_web_runtime_routes.py -q`: **10 passed**, client-sim smoke 및 `ccoli --help` exit0. 실제 운영 HTTP는 페이지·버전 SVG 모두200, SVG image/svg+xml·작업 파일과 일치·HTML 버전 참조3개·작업 Running을 확인했다. 브라우저 실제 화면을 자동 조작한 검증으로 대신하지 않는다. 생산 로직·인증·음성 설정은 변경하지 않았다. 정적 파일은 재시작 없이 제공되며 열린 페이지는 새로고침하면 새 아이콘을 읽는다.
+
+푸시 전 검증: HEAD 소스를 별도 산출물에 펼치고 이번 변경 6개 파일만 반영한 서버·브랜드 폴더를 Docker에 읽기 전용으로 마운트했다. 정적 UI/런타임 테스트 **10 passed**. 기존 PNG 경로·minified CSS에 묶인 정적 테스트를 현재 SVG 및 레이아웃 규칙으로 갱신했으며 독립 리뷰도 PASS였다.

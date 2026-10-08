@@ -403,8 +403,7 @@ body,button,input,select,textarea,p,h1,h2,h3,h4,dt,dd,span,strong,small,pre{over
   border-color:rgba(255,255,255,.08);
 }
 #hero-mascot{
-  width:min(100%,240px);
-  filter:drop-shadow(rgba(0,0,0,0.22) 3px 5px 30px);
+  width:min(100%,180px);
   transition:transform var(--transition-med);
 }
 #hero-mascot:hover{transform:scale(1.03)}
