@@ -39,6 +39,8 @@ class STTEngine:
         - device: 실행 디바이스 (cuda, cpu)
         - language: 인식 언어 (기본값: 한국어)
         """
+        self.cpu_threads = self._positive_env_int("STT_CPU_THREADS", 4, 64)
+        self.beam_size = self._positive_env_int("STT_BEAM_SIZE", 1, 10)
         self.model_size = model_size
         self.device = device
         self.language = language
@@ -46,6 +48,17 @@ class STTEngine:
         self.model = None
         self.device_in_use = None
         self.device_priority = self._normalize_device_priority(device_priority or [device, "cpu"])
+
+    @staticmethod
+    def _positive_env_int(name: str, default: int, maximum: int) -> int:
+        raw = os.environ.get(name, str(default))
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be an integer from 1 to {maximum}") from exc
+        if not 1 <= value <= maximum:
+            raise ValueError(f"{name} must be an integer from 1 to {maximum}")
+        return value
 
     @staticmethod
     def _normalize_device_priority(devices: Sequence[str]) -> list[str]:
@@ -84,7 +97,7 @@ class STTEngine:
             self.model_size,
             device=device,
             compute_type=("int8" if device == "cpu" else "float16"),
-            cpu_threads=1,
+            cpu_threads=self.cpu_threads,
             num_workers=1,
         )
         self.model = model
@@ -250,7 +263,7 @@ class STTEngine:
             segments, info = self.model.transcribe(
                 pcm_f32,
                 language=self.language,
-                beam_size=5,                        # 빔 서치 크기
+                beam_size=self.beam_size,                        # 빔 서치 크기
                 temperature=0.0,                    # 결정적 출력을 위한 온도 설정
                 condition_on_previous_text=False,   # 이전 텍스트 조건부 비활성화
                 repetition_penalty=1.15,            # 반복 억제

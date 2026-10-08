@@ -20,7 +20,7 @@ Voice-first AI assistant for Arduino makers — speak to an Atom Echo, get intel
 
 ccoli turns an **M5Stack Atom Echo (ESP32)** into a voice assistant powered by your PC. You speak → the device sends audio over USB or Wi-Fi → your PC handles speech recognition, LLM reasoning, and text-to-speech → the device plays back the response.
 
-No cloud required. Runs with local Ollama out of the box, or connect to Gemini / Claude / ChatGPT.
+Local Ollama is available for text generation. The repository config prefers Gemini when an API key is set, with Ollama as a fallback; setup can select either path. The default Edge TTS voice service requires a network connection.
 
 <div align="center">
 <img src="assets/summary.png" alt="ccoli system overview" width="700" />
@@ -98,9 +98,22 @@ No extra setup is required for default USB wired mode.
 - Arduino IDE upload speed can stay at `115200`; flashing speed and runtime protocol settings are still separate
 - On the first connection, the server waits for an ESP32 `PING`/`PONG` handshake before sending the welcome TTS, then brackets playback with `MIC_LOCK`/`MIC_UNLOCK`
 
-Optional robot/display mode:
-- Install Arduino libraries `Adafruit SSD1306` and `Adafruit GFX Library`
-- Connect an external SSD1306 OLED to `G25` (SDA) and `G21` (SCL)
+Optional robot/display peripherals:
+
+`G19`/`G22`/`G23`/`G33` drive the I2S mic and speaker, so only `G21`/`G25`/`G26`/`G32`
+are free — and every add-on shares them. Pick one `DISPLAY_TYPE` in
+`arduino/atom_echo_m5stack_esp32_ino/config.h`:
+
+| `DISPLAY_TYPE` | Display | Display pins | Local servos | Extra Arduino libraries |
+|---|---|---|---|---|
+| `0` (default) | none | — | `G26` pitch, `G32` tilt | none |
+| `1` | SSD1306 OLED (I2C) | `G25` SDA, `G21` SCL | `G26` pitch, `G32` tilt | `Adafruit SSD1306`, `Adafruit GFX Library` |
+| `2` | Waveshare ST7789V2 LCD (SPI) | `G25` DIN, `G21` CLK, `G26` CS, `G32` DC | disabled — no pins left | `Adafruit ST7735 and ST7789 Library`, `Adafruit GFX Library` |
+
+`DISPLAY_TYPE 2` disables local servo output automatically, because the SPI panel
+claims all four free pins. Driving an LCD *and* servos means moving both to a companion
+board (`ROBOT_BRIDGE_ENABLED 1`, Grove `G26`/`G32` become UART TX/RX) — see
+[docs/ROBOT_MODE_WAVESHARE_PRD.md](docs/ROBOT_MODE_WAVESHARE_PRD.md).
 
 <details>
 <summary><b>First-Time Arduino IDE Setup (ESP32 + Atom Echo)</b></summary>
@@ -148,6 +161,7 @@ Then connect the Atom Echo to your PC with USB-C.
 - LED status: red while waiting for the server link, light green when the device is connected and ready.
 - On the first healthy `PING`/`PONG` handshake, ccoli speaks a short time-of-day welcome line without calling the LLM, so startup greetings cannot be sent before the device is ready or truncated by model output limits.
 - On macOS, the current STT path uses `faster-whisper`, so STT stays on `cpu` rather than Apple `MPS`. The default TTS backend `edge_tts` also does not use local MPS/GPU acceleration.
+- Optional Gemini 3.8 Flash-Lite TTS is available with `TTS_BACKEND=gemini_tts`, `TTS_MODEL=gemini-3.8-flash-lite-tts`, `TTS_GEMINI_VOICE=Kore`, and `GEMINI_API_KEY`. Edge remains the default because it was faster on this PC; Gemini failures fall back to Edge.
 
 ### 4. Optional Wi-Fi mode
 
@@ -192,7 +206,7 @@ flowchart LR
 ## ✨ Features
 
 - 🗣️ **Voice-first** — speak naturally, get voice responses
-- 🧠 **Multi-LLM** — Ollama (local, default), Gemini, Claude, ChatGPT
+- 🧠 **Multi-LLM** — Gemini when configured, local Ollama fallback, Claude, ChatGPT
 - 🧭 **Runtime priority routing** — resolves model, network, and processor candidates in priority order, then keeps the selected LLM route until config or priority is reloaded
 - 🔌 **Integrations** — weather, calendar, search, maps, notifications
 - 🎙️ **Voice ID** — speaker recognition to personalize responses
@@ -234,7 +248,7 @@ Choose your cloud provider
   3. chatgpt - OpenAI ChatGPT
 Select [1]: 1
 
-Model name [gemini-2.5-flash]:
+Model name [gemini-3.8-flash]:
 Choose STT device
   1. cpu   - Best default for macOS and general compatibility
   2. cuda  - Use NVIDIA CUDA when available
@@ -248,7 +262,7 @@ Select [1]: 1
 Setup Plan
 - Install target: api
 - Provider: gemini
-- Model: gemini-2.5-flash
+- Model: gemini-3.8-flash
 - STT device: cpu
 - Device connection: wired
 - Server port: 5001
@@ -276,10 +290,10 @@ Default is Ollama (local, no API key). Switch anytime:
 
 ```bash
 ccoli setup
-ccoli config llm --provider ollama --model qwen3:8b
-ccoli config llm --provider gemini --model gemini-2.5-flash --api-key <GEMINI_API_KEY>
-ccoli config llm --provider claude --model claude-3-5-haiku-latest --api-key <ANTHROPIC_API_KEY>
-ccoli config llm --provider chatgpt --model gpt-4o-mini --api-key <OPENAI_API_KEY>
+ccoli config llm --provider ollama --model qwen3.5:4b
+ccoli config llm --provider gemini --model gemini-3.8-flash --api-key <GEMINI_API_KEY>
+ccoli config llm --provider claude --model claude-sonnet-5-5 --api-key <ANTHROPIC_API_KEY>
+ccoli config llm --provider chatgpt --model gpt-6-luna --api-key <OPENAI_API_KEY>
 ```
 
 API key 발급:
@@ -300,7 +314,7 @@ Ollama is auto-installed and auto-started if missing.
 
 ```yaml
 llm:
-  priority: [ollama, api, ollama_cpu, other]
+  priority: [api, ollama, ollama_cpu, other]
   api_priority: [gemini, claude, chatgpt]
 connection:
   priority: [wired, wifi]
@@ -312,7 +326,7 @@ You can change the same priorities during a conversation or in the web chat:
 
 ```text
 @@우선순위 상태
-모델 우선순위 ollama > api > ollama cpu > other
+모델 우선순위 api > ollama > ollama cpu > other
 api 우선순위 gemini > claude > chatgpt
 연결 우선순위 wired > wifi
 프로세서 우선순위 gpu > cpu
@@ -320,9 +334,9 @@ api 우선순위 gemini > claude > chatgpt
 
 When `connection.mode` is `auto`, the server keeps checking both `Wired` and `WiFi` live and binds to the first healthy link that appears while still honoring the current priority order.
 
-LLM priority is resolved on the first LLM request after startup or priority/config reload. If a higher-priority route such as local Ollama is unavailable and Gemini succeeds, later turns go directly to Gemini instead of rechecking Ollama on every message.
+LLM priority is resolved on the first request after startup or priority/config reload. This project prefers the configured API when a key exists, then uses local Ollama as fallback; after a route succeeds, later turns reuse it until it fails or settings change.
 
-For voice latency and stable TTS, LLM thinking is disabled in runtime calls. Gemini requests send `thinkingBudget: 0`, and regular agent responses use a larger output budget to avoid short Korean replies being cut mid-sentence.
+For voice latency, Gemini 3.x requests use `thinkingLevel: low` while older Gemini 2.5 uses `thinkingBudget: 0`; the agent keeps a bounded output budget to avoid clipped Korean replies.
 
 `ollama_cpu` is a distinct fallback bucket in runtime policy, but a single shared Ollama server cannot be forced to switch GPU/CPU per request. To make that bucket physically separate, point it at a dedicated CPU-only local Ollama instance.
 
@@ -441,3 +455,7 @@ This project is licensed under the [GNU Affero General Public License v3.0](LICE
 ## Web dashboard
 
 Open http://localhost:8005 for the multilingual dashboard with `English` as the default UI, optional `한국어 / 日本語 / 中文` switching, a diagnostics-first runtime view, editable memory/schedules/chat, and live logs.
+
+## Next-generation personal and home agent
+
+This project's standard configuration enables the bounded personal tool engine and binds the dashboard to `127.0.0.1`. Set `AGENT_ENABLED=false` to use the earlier conversation flow. To access the dashboard from another device, configure authentication and an explicit `WEB_HOST` network address. See the [usage guide](docs/NEXTGEN_AGENT_GUIDE.md), [PRD](docs/NEXTGEN_AGENT_PRD.md), [execution plan](docs/NEXTGEN_AGENT_PLAN.md), and [verification record](docs/NEXTGEN_AGENT_VERIFICATION.md).

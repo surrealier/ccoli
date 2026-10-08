@@ -120,7 +120,7 @@ def test_api_diagnostics_exposes_normalized_runtime_data():
     assert payload["mode"] == "agent"
     assert payload["runtime"]["warmup"]["stt_ready"] is True
     assert payload["runtime"]["llm"]["active_provider"] == "gemini"
-    assert payload["stt"]["model_size"] == "medium"
+    assert payload["stt"]["model_size"] == "turbo"
     assert payload["stt"]["device_in_use"] == "cpu"
     assert payload["connection"]["connected"] is True
     assert payload["connection"]["current_transport"] == "wired"

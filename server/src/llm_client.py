@@ -130,22 +130,26 @@ class LLMClient:
         except Exception as exc:
             error_message = str(exc)
             error_code = "missing_api_key" if "API_KEY is missing" in error_message else "provider_error"
-            self._remember_error(error_code, error_message)
-            log.error("%s API error: %s", self.provider, exc)
+            safe_message = f"{self.provider.upper()}_API_KEY is missing" if error_code == "missing_api_key" else f"Provider request failed ({type(exc).__name__})"
+            self._remember_error(error_code, safe_message)
+            log.error("%s API error: %s", self.provider, safe_message)
         return ""
 
     def _chat_openai(self, messages: list, temperature: float, max_tokens: int) -> str:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is missing")
+        payload = {"model": self.model, "messages": messages, "temperature": temperature}
+        if self.model.startswith(("gpt-6", "gpt-5.6")):
+            payload["max_completion_tokens"] = max_tokens
+            payload["reasoning_effort"] = "low" if "astra" in self.model else "none"
+            if payload["reasoning_effort"] != "none":
+                payload.pop("temperature")
+        else:
+            payload["max_tokens"] = max_tokens
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+            json=payload,
             timeout=(5, 120),
         )
         response.raise_for_status()
@@ -167,6 +171,20 @@ class LLMClient:
             else:
                 non_system.append(msg)
 
+        payload = {
+            "model": self.model,
+            "system": system_prompt.strip(),
+            "messages": non_system,
+            "max_tokens": max_tokens,
+        }
+        if self.model == "claude-sonnet-5-5":
+            # This model rejects non-default sampling and thinks up front by
+            # default. Keep the latency-sensitive voice fallback concise.
+            payload["thinking"] = {"type": "between_tools"}
+            payload["output_config"] = {"effort": "low"}
+        else:
+            payload["temperature"] = temperature
+
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -174,25 +192,23 @@ class LLMClient:
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={
-                "model": self.model,
-                "system": system_prompt.strip(),
-                "messages": non_system,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+            json=payload,
             timeout=(5, 120),
         )
         response.raise_for_status()
         data = response.json()
         content = data.get("content") or []
-        text_parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+        text_parts = [
+            part["text"] for part in content
+            if isinstance(part, dict) and part.get("type") in (None, "text")
+            and isinstance(part.get("text"), str)
+        ]
         return "".join(text_parts).strip()
 
     def _chat_gemini(self, messages: list, temperature: float, max_tokens: int) -> str:
         text, finish_reason = self._chat_gemini_once(messages, temperature, max_tokens)
         used_tokens = max_tokens
-        if text and finish_reason == "MAX_TOKENS":
+        if finish_reason == "MAX_TOKENS":
             retry_tokens = min(max(max_tokens * 2, 384), LLM_RETRY_TOKEN_CAP)
             if retry_tokens > max_tokens:
                 log.warning(
@@ -219,28 +235,34 @@ class LLMClient:
             raise RuntimeError("GEMINI_API_KEY is missing")
 
         contents = []
+        system_parts = []
         for msg in messages:
             role = msg.get("role", "user")
-            mapped_role = "model" if role == "assistant" else "user"
+            part = {"text": msg.get("content", "")}
             if role == "system":
-                mapped_role = "user"
-            contents.append({"role": mapped_role, "parts": [{"text": msg.get("content", "")}]} )
+                system_parts.append(part)
+                continue
+            mapped_role = "model" if role == "assistant" else "user"
+            contents.append({"role": mapped_role, "parts": [part]})
 
         generation_config = {
             "temperature": temperature,
             "maxOutputTokens": max_tokens,
         }
-        if self._gemini_supports_thinking_budget():
+        if self.model.lower().startswith("gemini-3"):
+            generation_config.pop("temperature")
+            generation_config["thinkingConfig"] = {"thinkingLevel": "low"}
+        elif self._gemini_supports_thinking_budget():
             generation_config["thinkingConfig"] = {
                 "thinkingBudget": GEMINI_THINKING_BUDGET,
             }
 
+        payload = {"contents": contents, "generationConfig": generation_config}
+        if system_parts:
+            payload["systemInstruction"] = {"parts": system_parts}
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}",
-            json={
-                "contents": contents,
-                "generationConfig": generation_config,
-            },
+            json=payload,
             timeout=(5, 120),
         )
         response.raise_for_status()
@@ -251,7 +273,7 @@ class LLMClient:
         candidate = candidates[0]
         finish_reason = (candidate.get("finishReason") or "").upper()
         candidate_content = (candidate.get("content") or {}).get("parts") or []
-        text = "".join(part.get("text", "") for part in candidate_content if isinstance(part, dict)).strip()
+        text = "".join(part.get("text", "") for part in candidate_content if isinstance(part, dict) and not part.get("thought")).strip()
         return text, finish_reason
 
     def _gemini_supports_thinking_budget(self) -> bool:
@@ -556,14 +578,15 @@ class PriorityLLMClient:
         think: ThinkType = None,
     ) -> str:
         self._clear_error_state()
+        failed_active = None
         if self._active_candidate_config is not None:
-            return self._chat_candidate(
-                self._active_candidate_config,
-                messages,
-                temperature,
-                max_tokens,
-                think,
-            )
+            active = self._active_candidate_config
+            response = self._chat_candidate(active, messages, temperature, max_tokens, think)
+            if response:
+                return response
+            failed_active = (active["provider"], active["model"])
+            self._active_candidate_config = None
+            self.active_candidate = None
 
         candidates = self._build_candidates()
         if not candidates:
@@ -572,6 +595,8 @@ class PriorityLLMClient:
 
         errors = []
         for candidate in candidates:
+            if failed_active == (candidate["provider"], candidate["model"]):
+                continue
             response = self._chat_candidate(candidate, messages, temperature, max_tokens, think)
             if response.strip():
                 return response.strip()

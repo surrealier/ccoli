@@ -19,6 +19,16 @@ DEFAULT_ANGLE_CENTER = 90
 ROBOT_CONTROLLER_LEGACY_DIRECT = "legacy_direct"
 ROBOT_CONTROLLER_COMPANION_UART = "companion_uart"
 
+# robot.display.type <-> DISPLAY_TYPE in
+# arduino/atom_echo_m5stack_esp32_ino/config.h. The firmware picks the pin map
+# from that macro, so the two must describe the same panel or the server will
+# report a display the device is not driving.
+DISPLAY_TYPE_TO_FIRMWARE = {
+    "none": 0,
+    "ssd1306": 1,
+    "st7789v2_240x280": 2,
+}
+
 EMOTION_MAP = {
     "neutral": {"face": "neutral", "action": "none", "led": [255, 255, 255]},
     "happy": {"face": "happy", "action": "bounce_happy", "led": [255, 200, 0]},
@@ -44,9 +54,9 @@ DEFAULT_ROBOT_CONFIG = {
     "servo": {
         "count": 2,
     },
-    "display": {
-        "type": "ssd1306",
-    },
+    # display.type is intentionally absent: seeding it here would mask the
+    # controller-derived default the same way robot.transport used to be masked.
+    "display": {},
     "emotion": {
         "persist_sec": 900,
     },
@@ -63,6 +73,20 @@ def _deep_merge(base: dict, override: dict | None) -> dict:
         else:
             base[key] = value
     return base
+
+
+def normalize_display_type(value, controller: str) -> str:
+    """Resolve robot.display.type, defaulting to what each controller can drive.
+
+    The companion board owns the SPI panel; the Atom Echo alone ships with
+    DISPLAY_TYPE 0 because an on-board display would take the servo pins.
+    """
+    display_type = str(value or "").strip().lower()
+    if display_type in DISPLAY_TYPE_TO_FIRMWARE:
+        return display_type
+    if display_type:
+        log.warning("Unknown robot.display.type %r; falling back to controller default", display_type)
+    return "st7789v2_240x280" if controller == ROBOT_CONTROLLER_COMPANION_UART else "none"
 
 
 def _normalize_robot_config(robot_config: dict | None) -> dict:
@@ -83,10 +107,7 @@ def _normalize_robot_config(robot_config: dict | None) -> dict:
     servo_cfg["count"] = min(4, max(1, servo_count))
 
     display_cfg = merged.setdefault("display", {})
-    display_type = str(display_cfg.get("type") or "").strip().lower()
-    if not display_type:
-        display_type = "st7789v2_240x280" if controller == ROBOT_CONTROLLER_COMPANION_UART else "ssd1306"
-    display_cfg["type"] = display_type
+    display_cfg["type"] = normalize_display_type(display_cfg.get("type"), controller)
 
     emotion_cfg = merged.setdefault("emotion", {})
     try:

@@ -13,6 +13,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from .auth import auth_required, token_matches
+
 # ── Forward references to server.py globals ──────────────────────────────────
 # These are set by create_app() and always return the live global values.
 _agent_ref: Callable = lambda: None
@@ -24,6 +26,8 @@ _dashboard_state_ref: Callable = lambda: _default_dashboard_state
 # ── WebSocket client registry ─────────────────────────────────────────────────
 _ws_clients: Set[WebSocket] = set()
 _ws_lock = threading.Lock()
+WS_AUTH_TIMEOUT_SECONDS = 5.0
+WS_AUTH_MAX_BYTES = 4096
 
 # ── Event loop reference (set during lifespan) ───────────────────────────────
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -61,6 +65,23 @@ async def broadcast(event: dict):
     if dead:
         with _ws_lock:
             _ws_clients.difference_update(dead)
+
+
+async def _authenticate_socket(websocket: WebSocket) -> bool:
+    """Read one bounded auth frame before registering a live event subscriber."""
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=WS_AUTH_TIMEOUT_SECONDS)
+        if not isinstance(raw, str) or len(raw.encode("utf-8")) > WS_AUTH_MAX_BYTES:
+            return False
+        frame = json.loads(raw)
+    except (asyncio.TimeoutError, WebSocketDisconnect, KeyError, RuntimeError, ValueError):
+        return False
+    return (
+        isinstance(frame, dict)
+        and set(frame) == {"event", "token"}
+        and frame["event"] == "authenticate"
+        and token_matches(frame["token"])
+    )
 
 
 @asynccontextmanager
@@ -126,12 +147,12 @@ def create_app(
     from .routes import (
         api_status, api_memory, api_conversation,
         api_schedules, api_config, api_integrations,
-        api_chat, api_logs, api_diagnostics,
+        api_chat, api_logs, api_diagnostics, api_agent,
     )
     for mod in (
         api_status, api_memory, api_conversation,
         api_schedules, api_config, api_integrations,
-        api_chat, api_logs, api_diagnostics,
+        api_chat, api_logs, api_diagnostics, api_agent,
     ):
         app.include_router(mod.router)
 
@@ -139,6 +160,9 @@ def create_app(
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):
         await websocket.accept()
+        if auth_required() and not await _authenticate_socket(websocket):
+            await websocket.close(code=4401)
+            return
         with _ws_lock:
             _ws_clients.add(websocket)
         try:

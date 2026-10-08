@@ -10,6 +10,11 @@ jobs:
   docker-compose-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        # Keep the local and CI entry point identical; the script captures
+        # each Compose pipeline exit status and preserves its logs.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -18,14 +23,8 @@ jobs:
           docker --version
           docker compose version
 
-      - name: Run server-test via Docker Compose
-        run: docker compose -f docker/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from server-test | tee artifacts-compose-server-test.log
-
-      - name: Run client-sim via Docker Compose
-        run: docker compose -f docker/docker-compose.test.yml run --rm client-sim | tee artifacts-compose-client-sim.log
-
-      - name: Run firmware compile check
-        run: docker compose -f docker/docker-compose.test.yml run --rm firmware-build | tee artifacts-firmware-build.log
+      - name: Run Docker quality gates
+        run: bash scripts/run_docker_tests.sh
 
       - name: Upload Docker test logs
         if: always()
@@ -33,9 +32,7 @@ jobs:
         with:
           name: docker-compose-test-logs
           path: |
-            artifacts-compose-server-test.log
-            artifacts-compose-client-sim.log
-            artifacts-firmware-build.log
+            artifacts/test-logs/*.log
 
       - name: Cleanup compose resources
         if: always()

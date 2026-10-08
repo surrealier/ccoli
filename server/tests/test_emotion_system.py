@@ -8,11 +8,13 @@ def test_initial_state():
     assert es.emotion_history == []
 
 
-def test_analyze_emotion_happy_keyword():
+def test_analyze_emotion_happy_keyword(caplog):
     es = EmotionSystem()
-    result = es.analyze_emotion("오늘 너무 행복해!")
+    caplog.set_level('INFO', logger='emotion_system')
+    result = es.analyze_emotion('오늘 너무 행복해! 비밀 음성 내용')
     assert result == "happy"
-    assert es.current_emotion == "happy"
+    assert es.current_emotion == 'happy'
+    assert '비밀 음성 내용' not in caplog.text
 
 
 def test_analyze_emotion_no_keyword_keeps_current():

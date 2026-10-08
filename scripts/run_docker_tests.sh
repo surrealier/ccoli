@@ -21,15 +21,29 @@ docker compose -f "${COMPOSE_FILE}" up --build --abort-on-container-exit --exit-
 SERVER_RC=${PIPESTATUS[0]}
 
 if [ ${SERVER_RC} -eq 0 ]; then
-  docker compose -f "${COMPOSE_FILE}" run --rm client-sim 2>&1 | tee "${LOG_DIR}/compose-client-sim.log"
+  docker compose -f "${COMPOSE_FILE}" run --rm --build client-sim 2>&1 | tee "${LOG_DIR}/compose-client-sim.log"
   CLIENT_RC=${PIPESTATUS[0]}
 else
   CLIENT_RC=0
 fi
+
+if [ ${SERVER_RC} -eq 0 ] && [ ${CLIENT_RC} -eq 0 ]; then
+  docker compose -f "${COMPOSE_FILE}" run --rm dashboard-test 2>&1 | tee "${LOG_DIR}/compose-dashboard-test.log"
+  DASHBOARD_RC=${PIPESTATUS[0]}
+else
+  DASHBOARD_RC=0
+fi
+
+if [ ${SERVER_RC} -eq 0 ] && [ ${CLIENT_RC} -eq 0 ] && [ ${DASHBOARD_RC} -eq 0 ]; then
+  docker compose -f "${COMPOSE_FILE}" run --rm --build firmware-build 2>&1 | tee "${LOG_DIR}/compose-firmware-build.log"
+  FIRMWARE_RC=${PIPESTATUS[0]}
+else
+  FIRMWARE_RC=0
+fi
 set -e
 
-if [ ${SERVER_RC} -ne 0 ] || [ ${CLIENT_RC} -ne 0 ]; then
-  echo "[ERROR] Docker tests failed. server-test=${SERVER_RC}, client-sim=${CLIENT_RC}"
+if [ ${SERVER_RC} -ne 0 ] || [ ${CLIENT_RC} -ne 0 ] || [ ${DASHBOARD_RC} -ne 0 ] || [ ${FIRMWARE_RC} -ne 0 ]; then
+  echo "[ERROR] Docker tests failed. server-test=${SERVER_RC}, client-sim=${CLIENT_RC}, dashboard-test=${DASHBOARD_RC}, firmware-build=${FIRMWARE_RC}"
   exit 1
 fi
 

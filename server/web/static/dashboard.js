@@ -721,6 +721,7 @@ const STATE = {
   locale: normalizeLocale(localStorage.getItem("ccoli.locale") || "en"),
   tab: normalizeTab(localStorage.getItem("ccoli.activeTab") || "overview"),
   token: localStorage.getItem("ccoli.authToken") || "",
+  authGeneration: 0,
   theme: localStorage.getItem("ccoli.theme") || "dark",
   memoryFile: localStorage.getItem("ccoli.activeMemory") || "Soul.md",
   status: null,
@@ -735,6 +736,7 @@ const STATE = {
   ws: null,
   wsHeartbeat: null,
   wsRetry: null,
+  wsAuthBlocked: false,
   logsPaused: false,
   lastChatSignature: "",
 };
@@ -960,13 +962,26 @@ async function refreshDiagnostics(silent = false) {
 }
 
 async function api(path, options = {}) {
+  const generation = STATE.authGeneration;
   const headers = new Headers(options.headers || {});
-  if (STATE.token) headers.set("X-Auth-Token", STATE.token);
+  if (STATE.token) {
+    headers.set("X-Auth-Token", utf8Base64Url(STATE.token));
+    headers.set("X-Auth-Token-Encoding", "utf8-base64url");
+  }
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
-  const response = await fetch(path, { ...options, headers });
-  const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+  let response;
+  let payload;
+  try {
+    response = await fetch(path, { ...options, headers });
+    if (generation !== STATE.authGeneration) throw new StaleAuthResponse();
+    const contentType = response.headers.get("content-type") || "";
+    payload = contentType.includes("application/json") ? await response.json() : await response.text();
+  } catch (error) {
+    if (generation !== STATE.authGeneration) throw new StaleAuthResponse();
+    throw error;
+  }
+  if (generation !== STATE.authGeneration) throw new StaleAuthResponse();
   if (!response.ok) {
     const detail = typeof payload === "string" ? payload : payload.detail || JSON.stringify(payload);
     throw new Error(detail || `HTTP ${response.status}`);
@@ -974,11 +989,21 @@ async function api(path, options = {}) {
   return payload;
 }
 
+class StaleAuthResponse extends Error {}
+
+function utf8Base64Url(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 async function fetchStatus(silent = false) {
   try {
     STATE.status = await api("/api/status");
     renderStatus();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -991,6 +1016,7 @@ async function fetchDiagnostics(silent = false) {
     renderDiagnostics();
     renderStatus();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1008,6 +1034,7 @@ async function runDiagnosticCheck(target) {
     renderDiagnostics();
     toast(result.summary || t("common.checkCompleted"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
 }
@@ -1036,6 +1063,7 @@ async function saveSttSettings(event) {
     await Promise.allSettled([fetchDiagnostics(true), fetchConfig(true), fetchStatus(true)]);
     toast(t("common.saving"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.saveFailed")}: ${error.message}`);
   }
 }
@@ -1050,6 +1078,7 @@ async function saveConnectionSettings(event) {
     await Promise.allSettled([fetchDiagnostics(true), fetchConfig(true), fetchStatus(true)]);
     toast(t("common.saving"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.saveFailed")}: ${error.message}`);
   }
 }
@@ -1059,6 +1088,7 @@ async function fetchConfig(silent = false) {
     STATE.configSnapshot = await api("/api/config/");
     renderConfigSnapshot();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1074,6 +1104,7 @@ async function fetchIntegrations(silent = false) {
     STATE.integrations = payload.integrations || {};
     renderIntegrations();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1089,6 +1120,7 @@ async function toggleIntegration(name, enabled) {
     renderIntegrations();
     toast(t("common.integrationUpdated"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
 }
@@ -1103,6 +1135,7 @@ async function checkIntegration(name) {
     renderIntegrations();
     toast(t("common.checkCompleted"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     STATE.integrationHealth[name] = { ok: false, text: error.message };
     renderIntegrations();
     toast(`${t("common.actionFailed")}: ${error.message}`);
@@ -1217,6 +1250,7 @@ async function fetchMemoryList(silent = false) {
     STATE.memoryFiles = Array.isArray(payload.files) ? payload.files : [];
     renderMemoryList();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1250,6 +1284,7 @@ async function loadMemory(file = STATE.memoryFile, silent = false) {
     $("#memory-editor").value = payload.content || "";
     renderMemoryList();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1266,6 +1301,7 @@ async function saveMemory() {
     toast(t("common.saving"));
     fetchMemoryList(true);
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.saveFailed")}: ${error.message}`);
   }
 }
@@ -1280,6 +1316,7 @@ async function fetchSpeakers(silent = false) {
       speakers.map((speaker) => `<option value="${escapeHTML(speaker)}">${escapeHTML(speaker)}</option>`).join("");
     if (speakers.includes(current)) select.value = current;
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1295,6 +1332,7 @@ async function fetchConversation(silent = false) {
     renderConversation();
     renderOverviewConversation();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1327,6 +1365,7 @@ async function clearConversation() {
     renderOverviewConversation();
     toast(t("common.historyCleared"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
 }
@@ -1340,6 +1379,7 @@ async function fetchSchedules(silent = false) {
     renderSchedules();
     renderOverviewSchedules();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1385,6 +1425,7 @@ async function createSchedule(event) {
     fetchSchedules(true);
     toast(t("common.scheduleAdded"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
 }
@@ -1395,6 +1436,7 @@ async function completeSchedule(id) {
     fetchSchedules(true);
     toast(t("common.scheduleCompleted"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
 }
@@ -1406,6 +1448,7 @@ async function deleteSchedule(id) {
     fetchSchedules(true);
     toast(t("common.scheduleDeleted"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
 }
@@ -1429,6 +1472,7 @@ async function sendChat(event) {
     appendChat("assistant", payload.response || "", { emotion: payload.emotion, intent: payload.intent });
     toast(t("common.chatReceived"));
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     appendChat("assistant", `Error: ${error.message}`, { emotion: "error" });
     toast(`${t("common.actionFailed")}: ${error.message}`);
   }
@@ -1467,6 +1511,7 @@ async function fetchLogs(silent = false) {
     renderLogs();
     renderOverviewLogs();
   } catch (error) {
+    if (error instanceof StaleAuthResponse) return;
     if (!silent) toast(`${t("common.loadFailed")}: ${error.message}`);
     throw error;
   }
@@ -1621,32 +1666,77 @@ function saveToken() {
   } else {
     localStorage.removeItem("ccoli.authToken");
   }
+  clearPrivateView();
   toast(t("common.tokenSaved"));
+  connectWs(true);
+  refreshAll(true);
 }
 
 function clearToken() {
   STATE.token = "";
   $("#auth-token").value = "";
   localStorage.removeItem("ccoli.authToken");
+  clearPrivateView();
   toast(t("common.tokenCleared"));
+  connectWs(true);
+  refreshAll(true);
+}
+
+function clearPrivateView() {
+  STATE.authGeneration += 1;
+  STATE.status = null;
+  STATE.diagnostics = null;
+  STATE.integrations = {};
+  STATE.integrationHealth = {};
+  STATE.memoryFiles = [];
+  STATE.memoryFile = "Soul.md";
+  STATE.conversations = [];
+  STATE.schedules = [];
+  STATE.logs = [];
+  STATE.chat = [];
+  STATE.configSnapshot = null;
+  STATE.lastChatSignature = "";
+  localStorage.removeItem("ccoli.activeMemory");
+
+  $("#memory-editor").value = "";
+  $("#memory-title").textContent = "";
+  $("#memory-meta").textContent = "";
+  $("#speaker-filter").innerHTML = `<option value="">${escapeHTML(t("conversation.filters.allSpeakers"))}</option>`;
+  $("#speaker-filter").value = "";
+  $("#chat-input").value = "";
+  $("#chat-speaker").value = "web_user";
+  $("#schedule-title").value = "";
+  $("#schedule-description").value = "";
+  $("#schedule-datetime").value = "";
+  $("#log-filter").value = "";
+  $("#stt-device").value = "";
+  $("#stt-model-size").value = "";
+  $("#connection-mode").value = "";
+  renderAll();
 }
 
 function connectWs(force = false) {
-  if (force && STATE.ws) {
+  if (force) {
     clearWsTimers();
+    STATE.wsAuthBlocked = false;
+    const previous = STATE.ws;
+    STATE.ws = null;
     try {
-      STATE.ws.close();
+      if (previous) previous.close();
     } catch (error) {
       console.warn(error);
     }
   }
 
+  if (STATE.wsAuthBlocked) return;
   if (STATE.ws && (STATE.ws.readyState === WebSocket.OPEN || STATE.ws.readyState === WebSocket.CONNECTING)) return;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   wsState(false, localePhrase("Connecting live...", "실시간 연결 중...", "ライブ接続中...", "正在连接实时流..."));
 
+  let socket;
   try {
-    STATE.ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    STATE.ws = socket;
   } catch (error) {
     wsState(false, localePhrase("Live connection failed", "실시간 연결 실패", "ライブ接続失敗", "实时连接失败"));
     toast(`${t("common.actionFailed")}: ${error.message}`);
@@ -1654,15 +1744,23 @@ function connectWs(force = false) {
     return;
   }
 
-  STATE.ws.addEventListener("open", () => {
+  socket.addEventListener("open", () => {
+    if (STATE.ws !== socket) return;
+    try {
+      socket.send(JSON.stringify({ event: "authenticate", token: STATE.token }));
+    } catch (error) {
+      socket.close();
+      return;
+    }
     wsState(true, localePhrase("Live connected", "실시간 연결됨", "ライブ接続済み", "实时连接成功"));
     clearWsTimers();
     STATE.wsHeartbeat = window.setInterval(() => {
-      if (STATE.ws && STATE.ws.readyState === WebSocket.OPEN) STATE.ws.send("ping");
+      if (STATE.ws === socket && socket.readyState === WebSocket.OPEN) socket.send("ping");
     }, 20000);
   });
 
-  STATE.ws.addEventListener("message", (event) => {
+  socket.addEventListener("message", (event) => {
+    if (STATE.ws !== socket) return;
     try {
       handleWs(JSON.parse(event.data));
     } catch (error) {
@@ -1670,13 +1768,28 @@ function connectWs(force = false) {
     }
   });
 
-  STATE.ws.addEventListener("close", () => {
-    wsState(false, localePhrase("Reconnecting live...", "실시간 재연결 대기 중", "ライブ再接続待機中", "等待重新连接实时流"));
+  socket.addEventListener("close", (event) => {
+    if (STATE.ws !== socket) return;
+    STATE.ws = null;
     clearWsTimers();
+    if (event.code === 4401) {
+      STATE.wsAuthBlocked = true;
+      const guidance = localePhrase(
+        "Live access denied. Enter the dashboard token in Advanced and save it.",
+        "실시간 접근이 거부됐어요. 고급 설정에서 대시보드 토큰을 입력하고 저장하세요.",
+        "ライブ接続が拒否されました。詳細設定でトークンを入力して保存してください。",
+        "实时连接被拒绝。请在高级设置中输入并保存令牌。"
+      );
+      wsState(false, guidance);
+      toast(guidance);
+      return;
+    }
+    wsState(false, localePhrase("Reconnecting live...", "실시간 재연결 대기 중", "ライブ再接続待機中", "等待重新连接实时流"));
     retryWs();
   });
 
-  STATE.ws.addEventListener("error", () => {
+  socket.addEventListener("error", () => {
+    if (STATE.ws !== socket) return;
     wsState(false, localePhrase("Live connection unstable", "실시간 연결 불안정", "ライブ接続が不安定です", "实时连接不稳定"));
   });
 }
@@ -1715,6 +1828,7 @@ function wsState(live, label) {
 }
 
 function retryWs() {
+  if (STATE.wsAuthBlocked) return;
   if (!STATE.wsRetry) {
     STATE.wsRetry = window.setTimeout(() => {
       STATE.wsRetry = null;

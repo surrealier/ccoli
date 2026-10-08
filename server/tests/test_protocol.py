@@ -118,6 +118,67 @@ def test_encode_serial_audio_payload_downsamples_to_wired_codec():
     assert restored[3] > 1000
 
 
+def test_encode_serial_audio_payload_does_not_attenuate_the_signal():
+    # A post-decimation low-pass used to bleed one sample into the next, so the
+    # first encoded sample came back at ~56% amplitude and speech sounded muffled.
+    # Averaging pairs is the only filtering step, so a steady block must survive
+    # within mu-law quantization error.
+    level = 12000
+    pcm = np.full(8, level, dtype=np.int16).tobytes()
+
+    restored = np.frombuffer(
+        protocol._decode_serial_audio_payload(protocol._encode_serial_audio_payload(pcm)),
+        dtype=np.int16,
+    )
+
+    assert restored.size == 8
+    assert np.all(np.abs(restored.astype(np.int32) - level) < level * 0.1)
+
+
+def test_send_packet_refuses_command_payloads_larger_than_the_device_buffer():
+    # Splitting a CMD gives each fragment its own header, so the device sees two
+    # packets and parses neither. Failing loudly beats emitting garbage frames.
+    s1, s2 = socket.socketpair()
+    try:
+        s2.settimeout(0.1)
+        oversized = b"x" * (protocol.DEVICE_MAX_PACKET_PAYLOAD + 1)
+
+        assert protocol.send_packet(s1, protocol.PTYPE_CMD, oversized) is False
+
+        try:
+            leaked = s2.recv(1)
+        except socket.timeout:
+            leaked = b""
+        assert leaked == b"", "no partial frame should reach the device"
+    finally:
+        s1.close()
+        s2.close()
+
+
+def test_send_packet_clamps_audio_frames_to_the_device_buffer():
+    s1, s2 = socket.socketpair()
+    try:
+        payload = b"\x00\x01" * 4000
+        ok = protocol.send_packet(
+            s1,
+            protocol.PTYPE_AUDIO_OUT,
+            payload,
+            audio_chunk=60000,  # caller asks for more than the ESP32 can hold
+            audio_sleep_s=0,
+        )
+        assert ok
+
+        received = 0
+        while received < len(payload):
+            _ptype, chunk = read_packet(s2)
+            assert len(chunk) <= protocol.DEVICE_MAX_PACKET_PAYLOAD
+            received += len(chunk)
+        assert received == len(payload)
+    finally:
+        s1.close()
+        s2.close()
+
+
 def test_recv_packet_decodes_serial_audio_payload_back_to_pcm16():
     class _FakeSerialConn:
         def __init__(self, data: bytes):
@@ -186,3 +247,17 @@ def test_recv_packet_resyncs_after_incomplete_false_header():
             sender.join(timeout=1)
         s1.close()
         s2.close()
+
+
+def test_device_command_log_does_not_include_private_payload(monkeypatch, caplog):
+    sent = []
+
+    def fake_send_packet(conn, ptype, payload, lock=None):
+        sent.append(payload)
+        return True
+
+    monkeypatch.setattr(protocol, 'send_packet', fake_send_packet)
+    caplog.set_level('INFO', logger='src.protocol')
+    assert protocol.send_action(None, {'action': 'DISPLAY', 'sid': 7, 'text': '비밀 응답 문장'})
+    assert b'DISPLAY' in sent[0]
+    assert '비밀 응답 문장' not in caplog.text

@@ -29,10 +29,10 @@ except ImportError:  # pragma: no cover - rich is optional at bootstrap time
 DEFAULT_SERVER_PORT = 5001
 DEFAULT_SERVER_IP = "YOUR_SERVER_IP"
 DEFAULT_LLM_MODELS = {
-    "ollama": "qwen3:8b",
-    "gemini": "gemini-2.5-flash-lite",
-    "claude": "claude-3-5-haiku-latest",
-    "chatgpt": "gpt-4o-mini",
+    "ollama": "qwen3.5:4b",
+    "gemini": "gemini-3.8-flash",
+    "claude": "claude-sonnet-5-5",
+    "chatgpt": "gpt-6-luna",
 }
 
 INTEGRATION_SPECS = {
@@ -645,6 +645,21 @@ def _configure_llm(root: Path, provider: str, model: str, base_url: Optional[str
 
     llm_cfg["provider"] = provider
     llm_cfg["model"] = model
+    # A provider choice must also change the runtime route, otherwise a
+    # previously configured API or local model can keep winning at startup.
+    if provider == "ollama":
+        llm_cfg["ollama_model"] = model
+        llm_cfg["priority"] = ["ollama", "api", "ollama_cpu", "other"]
+    elif provider in {"gemini", "claude", "chatgpt"}:
+        api_models = llm_cfg.setdefault("api_models", {})
+        if not isinstance(api_models, dict):
+            api_models = {}
+            llm_cfg["api_models"] = api_models
+        api_models[provider] = model
+        llm_cfg["priority"] = ["api", "ollama", "ollama_cpu", "other"]
+        llm_cfg["api_priority"] = [provider] + [
+            item for item in ("gemini", "claude", "chatgpt") if item != provider
+        ]
 
     if provider == "ollama":
         llm_cfg["base_url"] = base_url or llm_cfg.get("base_url", "http://localhost:11434")

@@ -75,3 +75,56 @@ def test_safe_transcribe_cuda_runtime_error_with_cuda_index_falls_back_to_cpu(mo
     assert loaded == ["cpu"]
     assert segments[0].text == "복구"
     assert info["language"] == "ko"
+
+
+def test_stt_latency_defaults_reach_inference(monkeypatch):
+    monkeypatch.delenv("STT_CPU_THREADS", raising=False)
+    monkeypatch.delenv("STT_BEAM_SIZE", raising=False)
+    seen = {}
+
+    class CaptureModel:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+        def transcribe(self, pcm, **kwargs):
+            seen.update(kwargs)
+            return iter([FakeSegment("확인")]), {}
+
+    monkeypatch.setattr(stt_engine_module, "WhisperModel", CaptureModel)
+    engine = STTEngine("turbo", "cpu")
+    engine.safe_transcribe(np.zeros(16000, dtype=np.float32))
+    assert seen["cpu_threads"] == 4
+    assert seen["beam_size"] == 1
+    assert seen["compute_type"] == "int8"
+
+
+def test_stt_env_overrides_reach_inference(monkeypatch):
+    monkeypatch.setenv("STT_CPU_THREADS", "6")
+    monkeypatch.setenv("STT_BEAM_SIZE", "3")
+    seen = {}
+
+    class CaptureModel:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+        def transcribe(self, pcm, **kwargs):
+            seen.update(kwargs)
+            return iter([FakeSegment("확인")]), {}
+
+    monkeypatch.setattr(stt_engine_module, "WhisperModel", CaptureModel)
+    STTEngine("turbo", "cpu").safe_transcribe(np.zeros(16000, dtype=np.float32))
+    assert seen["cpu_threads"] == 6
+    assert seen["beam_size"] == 3
+
+
+def test_stt_invalid_latency_env_fails_before_model_load(monkeypatch):
+    import pytest
+
+    for name, value in [("STT_CPU_THREADS", "0"), ("STT_CPU_THREADS", "65"),
+                        ("STT_BEAM_SIZE", "0"), ("STT_BEAM_SIZE", "11"),
+                        ("STT_BEAM_SIZE", "fast"), ("STT_CPU_THREADS", "1.5")]:
+        monkeypatch.delenv("STT_CPU_THREADS", raising=False)
+        monkeypatch.delenv("STT_BEAM_SIZE", raising=False)
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError, match=name):
+            STTEngine("turbo", "cpu")

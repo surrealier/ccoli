@@ -16,11 +16,11 @@ API_PRIORITY_ALLOWED = ("gemini", "claude", "chatgpt")
 CONNECTION_PRIORITY_ALLOWED = ("wired", "wifi")
 PROCESSOR_PRIORITY_ALLOWED = ("gpu", "cpu")
 
-DEFAULT_OLLAMA_MODEL = "qwen2.5:0.5b"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_API_MODELS = {
-    "gemini": "gemini-2.5-flash",
-    "claude": "claude-3-5-haiku-latest",
-    "chatgpt": "gpt-4o-mini",
+    "gemini": "gemini-3.8-flash",
+    "claude": "claude-sonnet-5-5",
+    "chatgpt": "gpt-6-luna",
 }
 DEFAULT_LLM_PRIORITY = ["ollama", "api", "ollama_cpu", "other"]
 DEFAULT_API_PRIORITY = ["gemini", "claude", "chatgpt"]
@@ -268,6 +268,10 @@ class RuntimePreferences:
                     "because the faster-whisper path does not use MPS here."
                 )
 
+        if self.tts_backend == "gemini_tts":
+            notes.append(
+                "Gemini TTS is a remote model; local GPU, CPU, and MPS selection does not apply."
+            )
         if self.tts_backend in {"edge_tts", "edge-tts"}:
             notes.append(
                 "Current TTS backend is Edge TTS, so it does not use local GPU, CPU, or MPS selection."
@@ -287,6 +291,6 @@ class RuntimePreferences:
             "stt_mps_supported": False,
             "tts_backend": self.tts_backend,
             "tts_mps_supported": False,
-            "tts_processor_selectable": self.tts_backend not in {"edge_tts", "edge-tts"},
+            "tts_processor_selectable": self.tts_backend not in {"edge_tts", "edge-tts", "gemini_tts"},
             "audio_runtime_notes": self.audio_runtime_notes(),
         }

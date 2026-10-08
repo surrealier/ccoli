@@ -139,3 +139,28 @@ def test_priority_llm_client_reselects_after_runtime_reload(monkeypatch):
         ("ollama", "qwen2.5:0.5b", ""),
         ("gemini", "gemini-2.5-flash", "gem-key"),
     ]
+
+
+def test_priority_llm_client_falls_back_when_pinned_provider_later_fails(monkeypatch):
+    preferences = _preferences(accelerators=['cuda'])
+    preferences.llm_priority = ['api', 'ollama', 'ollama_cpu', 'other']
+    config = _llm_config()
+    config['anthropic_api_key'] = ''
+    config['openai_api_key'] = ''
+    client = PriorityLLMClient(config, preferences)
+    calls = []
+
+    def fake_client_for_candidate(provider, model, api_key=''):
+        calls.append(provider)
+        if provider == 'gemini':
+            return _FakeClient(provider, model, 'first response' if calls.count('gemini') == 1 else '', error_code='provider_error')
+        if provider == 'ollama':
+            return _FakeClient(provider, model, 'local fallback')
+        return _FakeClient(provider, model, '')
+
+    monkeypatch.setattr(client, '_client_for_candidate', fake_client_for_candidate)
+
+    assert client.chat([{'role': 'user', 'content': 'first'}]) == 'first response'
+    assert client.chat([{'role': 'user', 'content': 'second'}]) == 'local fallback'
+    assert calls == ['gemini', 'gemini', 'ollama']
+    assert client.describe_runtime()['active_provider'] == 'ollama'

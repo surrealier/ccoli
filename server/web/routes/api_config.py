@@ -11,7 +11,8 @@ router = APIRouter(prefix="/api/config", dependencies=[Depends(require_auth)])
 
 _REDACT_KEYS = {
     "openai_api_key", "anthropic_api_key", "gemini_api_key",
-    "api_key", "auth_token", "pass", "password", "secret",
+    "api_key", "auth_token", "bot_token", "client_secret", "refresh_token",
+    "pass", "password", "secret",
 }
 
 

@@ -269,3 +269,98 @@ def test_claude_provider_calls_anthropic_api(monkeypatch):
     assert result == "Claude 응답"
     assert captured["url"] == "https://api.anthropic.com/v1/messages"
     assert captured["headers"]["x-api-key"] == "ant-key"
+
+
+def test_gemini_preserves_system_instruction_boundary(monkeypatch):
+    captured = {}
+    def fake_post(url, json=None, timeout=None):
+        captured.update(json)
+        return _JsonResponse({'candidates': [{'content': {'parts': [{'text': 'ok'}]}}]})
+    monkeypatch.setattr('src.llm_client.requests.post', fake_post)
+    client = LLMClient('', 'gemini-2.5-flash-lite', provider='gemini', api_key='test-only')
+    assert client.chat([
+        {'role': 'system', 'content': 'Policy: verify actions.'},
+        {'role': 'user', 'content': 'hello'},
+        {'role': 'assistant', 'content': 'hi'},
+        {'role': 'user', 'content': 'complete my task'},
+    ]) == 'ok'
+    assert captured['systemInstruction']['parts'] == [{'text': 'Policy: verify actions.'}]
+    assert [m['role'] for m in captured['contents']] == ['user', 'model', 'user']
+    assert all('Policy:' not in str(m) for m in captured['contents'])
+
+def test_gemini_38_uses_low_thinking_without_removed_sampling(monkeypatch):
+    captured = {}
+    def fake_post(url, json=None, timeout=None):
+        captured.update(json)
+        return _JsonResponse({'candidates': [{'content': {'parts': [
+            {'thought': True, 'text': 'internal reasoning'}, {'text': 'hello'}]}}]})
+    monkeypatch.setattr('src.llm_client.requests.post', fake_post)
+    client = LLMClient('', 'gemini-3.8-flash', provider='gemini', api_key='test')
+    assert client.chat([{'role': 'user', 'content': 'hello'}]) == 'hello'
+    cfg = captured['generationConfig']
+    assert cfg['thinkingConfig'] == {'thinkingLevel': 'low'}
+    assert 'temperature' not in cfg
+    assert 'thinkingBudget' not in cfg['thinkingConfig']
+
+
+def test_gpt6_luna_uses_supported_fast_chat_parameters(monkeypatch):
+    captured = {}
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured.update(json)
+        return _JsonResponse({'choices': [{'message': {'content': 'hello'}}]})
+    monkeypatch.setattr('src.llm_client.requests.post', fake_post)
+    client = LLMClient('', 'gpt-6-luna', provider='chatgpt', api_key='test')
+    assert client.chat([{'role':'user','content':'hello'}], max_tokens=256) == 'hello'
+    assert captured['max_completion_tokens'] == 256
+    assert captured['reasoning_effort'] == 'none'
+    assert 'max_tokens' not in captured
+
+
+def test_gpt6_astra_omits_sampling_with_reasoning(monkeypatch):
+    captured = {}
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured.update(json)
+        return _JsonResponse({'choices': [{'message': {'content': 'hello'}}]})
+    monkeypatch.setattr('src.llm_client.requests.post', fake_post)
+    client = LLMClient('', 'gpt-6-astra', provider='chatgpt', api_key='test')
+    assert client.chat([{'role':'user','content':'hello'}]) == 'hello'
+    assert captured['reasoning_effort'] == 'low'
+    assert 'temperature' not in captured
+
+
+def test_gemini_retries_thought_only_truncation_once(monkeypatch):
+    budgets=[]
+    def fake_post(url, json=None, timeout=None):
+        budgets.append(json['generationConfig']['maxOutputTokens'])
+        if len(budgets)==1:
+            return _JsonResponse({'candidates':[{'finishReason':'MAX_TOKENS','content':{'parts':[{'thought':True,'text':'internal'}]}}]})
+        return _JsonResponse({'candidates':[{'finishReason':'STOP','content':{'parts':[{'text':'answer'}]}}]})
+    monkeypatch.setattr('src.llm_client.requests.post',fake_post)
+    client=LLMClient('', 'gemini-3.8-flash', provider='gemini', api_key='test')
+    assert client.chat([{'role':'user','content':'hello'}],max_tokens=768)=='answer'
+    assert budgets==[768,1536]
+
+
+def test_claude_sonnet_55_uses_low_latency_compatible_payload(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured['url'] = url
+        captured['json'] = json
+        return _JsonResponse({'content': [
+            {'type': 'thinking', 'thinking': 'private', 'text': 'must not speak'},
+            {'type': 'text', 'text': 'Claude 응답'},
+        ]})
+
+    monkeypatch.setattr('src.llm_client.requests.post', fake_post)
+    client = LLMClient('', 'claude-sonnet-5-5', provider='claude', api_key='synthetic-key')
+    result = client.chat([{'role': 'user', 'content': '안녕'}], temperature=0.2, max_tokens=90)
+
+    assert result == 'Claude 응답'
+    assert captured['url'] == 'https://api.anthropic.com/v1/messages'
+    payload = captured['json']
+    assert payload['model'] == 'claude-sonnet-5-5'
+    assert payload['max_tokens'] == 90
+    assert payload['thinking'] == {'type': 'between_tools'}
+    assert payload['output_config'] == {'effort': 'low'}
+    assert 'temperature' not in payload

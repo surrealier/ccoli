@@ -1,6 +1,10 @@
 #ifndef DISPLAY_CONTROL_H
 #define DISPLAY_CONTROL_H
 
+// display_control.cpp includes this header first, so it cannot rely on
+// Arduino.h having already pulled in the fixed-width integer types.
+#include <stdint.h>
+
 enum FaceType {
   FACE_NEUTRAL,
   FACE_HAPPY,

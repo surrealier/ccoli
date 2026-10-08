@@ -6,10 +6,12 @@
 - TTS 음성 합성 및 오디오 처리
 """
 import asyncio
+import json
 import logging
 import os
 import re
 import time
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -66,9 +68,24 @@ class AgentMode:
         memory_refresh_interval=5,
         emotion_system=None,
         integration_config=None,
+        agent_config=None,
+        tts_backend="edge_tts",
+        tts_model="gemini-3.8-flash-lite-tts",
+        tts_gemini_voice="Kore",
+        tts_api_key="",
     ):
         self.llm = llm_client
         self.tts_voice = tts_voice or "ko-KR-SunHiNeural"
+        self.tts_backend = str(tts_backend or "edge_tts").strip().lower()
+        self.gemini_tts = None
+        if self.tts_backend == "gemini_tts" and tts_api_key:
+            from src.integrations.gemini_tts import GeminiTTS
+            try:
+                self.gemini_tts = GeminiTTS(
+                    tts_api_key, model=tts_model, voice=tts_gemini_voice,
+                )
+            except ValueError:
+                log.warning("Gemini TTS 설정을 확인해 주세요. Edge TTS를 사용합니다.")
         self.integration_config = integration_config or {}
 
         # 대화 기록
@@ -117,6 +134,32 @@ class AgentMode:
         )
         self.proactive = ProactiveInteraction(proactive_enabled, proactive_interval)
         self.scheduler = Scheduler()
+        self.tool_agent = None
+        self._tool_turn_lock = threading.Lock()
+        self._tool_state_lock = threading.RLock()
+        self._owner_turn_locks = {}
+        if (agent_config or {}).get("enabled", False):
+            from src.personal_store import PersonalStore
+            from src.tool_agent import ToolAgent
+
+            state_path = (agent_config or {}).get("state_path") or self.memory.memory_dir / "personal.sqlite3"
+            home = None
+            if os.getenv("HOME_ASSISTANT_URL", ""):
+                from src.integrations.home_assistant import HomeAssistantIntegration
+                try:
+                    candidate = HomeAssistantIntegration(
+                        os.getenv("HOME_ASSISTANT_URL", ""),
+                        os.getenv("HOME_ASSISTANT_TOKEN", ""),
+                        [item.strip() for item in os.getenv("HOME_ASSISTANT_ALLOWED_ENTITIES", "").split(",") if item.strip()],
+                    )
+                    if candidate.is_configured():
+                        home = candidate
+                except ValueError:
+                    log.warning("Home Assistant 설정을 확인해 주세요. 홈 도구를 비활성화합니다.")
+            self.tool_agent = ToolAgent(
+                llm_client, PersonalStore(state_path), home=home,
+                soul=self.memory._cache.get("Soul.md", ""), integrations=self.integrations,
+            )
 
     def _integration_entry(self, name: str) -> dict:
         if not isinstance(self.integration_config, dict):
@@ -395,6 +438,11 @@ class AgentMode:
         if not self.llm:
             return "모델이 로드되지 않았습니다.", "none"
 
+        if getattr(self, "tool_agent", None) is not None:
+            if is_proactive:
+                return self._generate_proactive_response(text)
+            return self._generate_tool_response(text, speaker_id)
+
         try:
             if not is_proactive:
                 self.proactive.update_interaction()
@@ -408,7 +456,7 @@ class AgentMode:
                 if info_data:
                     import json
                     info_context = json.dumps(info_data, ensure_ascii=False)
-                    log.info("Info data for LLM context: %s", info_context)
+                    log.info("Info data available for LLM context (characters=%d)", len(info_context))
 
                 schedule_response = self.scheduler.process_schedule_request(text)
                 if schedule_response and not info_context:
@@ -466,11 +514,141 @@ class AgentMode:
             self.conversation_count += 1
             self.memory.after_turn(history)
 
-            log.info("Agent Response (intent=%s): %s", intent, response)
+            log.info("Agent Response intent=%s characters=%d", intent, len(response))
             return response, intent
         except Exception as exc:
             log.error("LLM generation failed: %s", exc)
             return "죄송해요, 오류가 발생했어요.", "none"
+
+    @staticmethod
+    def _proactive_reply_text(raw: str) -> str:
+        """Suppress JSON syntax, code fences, and device intent tags in spoken text."""
+        def strip_intents(value: str) -> str:
+            return re.sub(r'\[INTENT:[^\]]*\]', '', value, flags=re.IGNORECASE).strip()
+
+        text = strip_intents(raw)
+        if len(text) > 12000 or text.startswith('```'):
+            return ''
+        if text.startswith(('{', '[')):
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                return ''
+            if not isinstance(payload, dict) or set(payload) != {'answer'} or not isinstance(payload['answer'], str):
+                return ''
+            text = strip_intents(payload['answer'])
+            if text.startswith(('{', '[', '```')):
+                return ''
+        if any(marker in text for marker in ('{', '}', '```')):
+            return ''
+        return text
+
+    def _generate_proactive_response(self, text: str) -> tuple[str, str]:
+        """An ephemeral public-context reply with no personal history or actions."""
+        if not isinstance(text, str) or not text.strip() or len(text) > 8000:
+            return '선제 대화 문장을 8000자 이내로 입력해 주세요.', 'none'
+        # A background suggestion must not queue behind or re-enter a user turn.
+        if not self._tool_turn_lock.acquire(blocking=False):
+            return '', 'none'
+        try:
+            with self._tool_state_lock:
+                soul = self.memory._cache.get('Soul.md', '')
+                now = datetime.now().strftime('%Y-%m-%d %H:%M')
+            system = soul + '\n\n[Proactive policy; takes precedence over personality]\n' + (
+                'Give a brief conversational greeting or suggestion in the prompt language. '
+                'There is no identified requester. Do not infer private facts or use personal memory. '
+                'Do not propose tools, claim actions completed, or emit device intent tags. '
+                'Reply with conversational text only. Current local time: ' + now
+            )
+            raw = self.llm.chat(
+                [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}],
+                temperature=0.8, max_tokens=AGENT_RESPONSE_MAX_TOKENS,
+            )
+            if not isinstance(raw, str) or not raw.strip():
+                response = self._llm_failure_response() or '선제 대화 응답을 만들지 못했어요. 모델 연결을 확인해 주세요.'
+            else:
+                response = self._sanitize_response(self._proactive_reply_text(raw))
+                if not response:
+                    return '', 'none'
+            with self._tool_state_lock:
+                self.emotion_system.set_body_state(sleep_mode=self.proactive.sleep_mode)
+                self.emotion_system.analyze_emotion(response, speaker_id='proactive')
+                self.conversation_count += 1
+            log.info('Proactive response characters=%d', len(response))
+            return response, 'none'
+        except Exception as exc:
+            log.warning('Proactive response generation failed (%s)', type(exc).__name__)
+            return '선제 대화 응답을 만들지 못했어요. 모델 연결을 확인해 주세요.', 'none'
+        finally:
+            self._tool_turn_lock.release()
+
+    def _generate_tool_response(self, text: str, speaker_id: str | None) -> tuple[str, str]:
+        """Preserve owner turn order while local paths bypass another owner's model."""
+        owner = speaker_id or "device"
+        with self._tool_state_lock:
+            owner_lock = self._owner_turn_locks.get(owner)
+            if owner_lock is None:
+                owner_lock = threading.RLock()
+                self._owner_turn_locks[owner] = owner_lock
+        with owner_lock:
+            with self._tool_state_lock:
+                self.proactive.update_interaction()
+                history = self._history_for_user(speaker_id)
+                self.emotion_system.set_body_state(sleep_mode=self.proactive.sleep_mode)
+                self.emotion_system.analyze_emotion(text, speaker_id=speaker_id or "default")
+                response = self._explicit_household_schedule(text)
+                self.tool_agent.soul = self.memory._cache.get("Soul.md", "")
+            # Scheduler output is data and must not become a device intent.
+            if response is None:
+                response = self.tool_agent.try_direct(text, owner, history)
+                if response is None:
+                    # Provider error/fallback state is shared, so model turns stay serial.
+                    with self._tool_turn_lock:
+                        response = self.tool_agent.run(text, owner, history)
+                intent, response = parse_intent(response)
+            else:
+                intent = "none"
+            response = self._sanitize_response(response)
+            with self._tool_state_lock:
+                if intent == "sleep":
+                    self.proactive.sleep_mode = True
+                    self.proactive.sleep_until = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+                    self.emotion_system.set_body_state(sleep_mode=True, fatigue=1.0)
+                now = datetime.now().isoformat()
+                history.extend([
+                    {"role": "user", "content": text, "timestamp": now},
+                    {"role": "assistant", "content": response, "timestamp": now},
+                ])
+                del history[:-self.max_history]
+                self.conversation_count += 1
+                self.emotion_system.analyze_emotion(response, speaker_id=speaker_id or "default")
+            return response, intent
+
+    def _explicit_household_schedule(self, text: str) -> str | None:
+        """Keep explicit local schedule requests on the existing household scheduler."""
+        if not isinstance(text, str) or not text.strip() or len(text) > 8000:
+            return None
+        if "일정" not in text or "캘린더" in text or "구글" in text:
+            return None
+        previous = list(self.scheduler.schedules)
+        try:
+            if re.search(r"(?:추가|등록|잡아)(?:해\s?줘|해\s?주세요|해|줘|주세요)?[.!?]?\s*$", text):
+                if getattr(self, "_last_schedule_request", None) == text:
+                    return "같은 일정 요청을 이미 처리했어요. 일정 목록을 확인해 주세요."
+                response = self.scheduler.parse_and_add_schedule(text)
+                persisted = json.loads(self.scheduler.schedule_file.read_text(encoding="utf-8"))
+                if persisted.get("schedules") != self.scheduler.schedules:
+                    raise ValueError("schedule persistence was not confirmed")
+                self._last_schedule_request = text
+                return response
+            if any(word in text for word in ("뭐", "무엇", "확인", "알려", "있어", "목록")):
+                if "오늘" in text:
+                    return self.scheduler.get_today_schedules()
+                return self.scheduler.process_schedule_request("일정 목록 알려줘")
+        except Exception:
+            self.scheduler.schedules = previous
+            return "일정을 처리하지 못했어요. 날짜와 시간, 저장 경로를 확인해 주세요."
+        return None
 
     def _history_for_user(self, speaker_id: str | None):
         if not speaker_id:
@@ -519,7 +697,7 @@ class AgentMode:
         if result.ok:
             return result.data
         if result.error:
-            log.warning("%s integration error: %s %s", provider, result.error.code, result.error.debug)
+            log.warning("%s integration error: %s", provider, result.error.code.value)
             return {
                 "type": "integration_error",
                 "integration": provider,
@@ -536,6 +714,22 @@ class AgentMode:
         await communicate.save(output_file)
 
     def text_to_audio(self, text: str, trim_pad_ms: float = 180.0):
+        """Synthesize PCM16LE, falling back to the faster Edge voice when needed."""
+        if getattr(self, "tts_backend", "edge_tts") == "gemini_tts":
+            adapter = getattr(self, "gemini_tts", None)
+            if adapter is not None:
+                try:
+                    audio = adapter.synthesize(text)
+                    if audio:
+                        log.info("Gemini TTS generated: %d bytes", len(audio))
+                        return audio
+                except Exception as exc:
+                    log.warning("Gemini TTS failed (%s); using Edge TTS", type(exc).__name__)
+            else:
+                log.warning("Gemini TTS is not configured; using Edge TTS")
+        return self._edge_text_to_audio(text, trim_pad_ms=trim_pad_ms)
+
+    def _edge_text_to_audio(self, text: str, trim_pad_ms: float = 180.0):
         """텍스트를 오디오로 변환 - TTS 생성 및 오디오 후처리"""
         tmp_mp3 = None
         try:
@@ -570,7 +764,7 @@ class AgentMode:
             with tempfile.NamedTemporaryFile(prefix="tts_", suffix=".mp3", delete=False) as tf:
                 tmp_mp3 = tf.name
 
-            log.info("Generating TTS for: %s", text[:50])
+            log.info("Generating TTS (characters=%d)", len(text))
 
             # 이벤트 루프 설정 및 TTS 생성
             try:

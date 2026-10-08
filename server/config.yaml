@@ -2,21 +2,21 @@ server:
   host: 0.0.0.0
   port: 5001
 stt:
-  model_size: medium
+  model_size: turbo
   device: cuda
   language: ko
 llm:
   provider: gemini
   base_url: ''
-  model: gemini-2.5-flash-lite
-  ollama_model: qwen2.5:0.5b
+  model: gemini-3.8-flash
+  ollama_model: qwen3.5:4b
   api_models:
-    gemini: gemini-2.5-flash
-    claude: claude-3-5-haiku-latest
-    chatgpt: gpt-4o-mini
+    gemini: gemini-3.8-flash
+    claude: claude-sonnet-5-5
+    chatgpt: gpt-6-luna
   priority:
-  - ollama
   - api
+  - ollama
   - ollama_cpu
   - other
   api_priority:
@@ -30,22 +30,35 @@ llm:
 tts:
   backend: edge_tts
   voice: ko-KR-SunHiNeural
+  model: gemini-3.8-flash-lite-tts
+  gemini_voice: Kore
 assistant:
-  name: ccoli
+  name: 콜리
   personality: witty
-  proactive: true
+  proactive: false
   proactive_interval: 600
+agent:
+  enabled: true
+  state_path: ''
 features:
   robot_mode_enabled: false
 robot:
+  controller: legacy_direct
+  transport: local
+  companion:
+    transport: uart
+    baudrate: 115200
+    tx_pin: 26
+    rx_pin: 32
   servo:
+    count: 2
     pin_pitch: 26
     pin_tilt: 32
     angle_min: 0
     angle_max: 180
     default_angle: 90
   display:
-    type: ssd1306
+    type: none
     width: 128
     height: 64
     i2c_scl: 21
@@ -59,9 +72,7 @@ robot:
     default: neutral
     decay_to_neutral: true
     decay_interval: 30
-memory:
-  refresh_interval: 5
-  memory_dir: memory
+    persist_sec: 900
 weather:
   api_key: ''
   lat: 37.5665
@@ -74,6 +85,9 @@ emotion:
   enabled: true
   decay_to_neutral: true
   decay_interval: 300
+memory:
+  refresh_interval: 5
+  memory_dir: ../.codex/personal_memory
 logging:
   level: INFO
   save_to_file: true
@@ -84,30 +98,46 @@ connection:
   - wired
   - wifi
   socket_timeout: 0.5
-  serial_port: auto
+  serial_port: COM3
   serial_baudrate: 115200
   serial_scan_interval: 1.0
   serial_initial_idle_timeout_s: 5.0
-runtime:
-  processor_priority:
-  - gpu
-  - cpu
 queue:
   stt_maxsize: 4
   tts_maxsize: 2
   command_maxsize: 10
 audio:
   max_seconds: 12
-setup:
-  install_target: api
-  provider: gemini
-  python_extras:
-  - runtime
-  connection_mode: wired
-  server_port: 5001
+integrations:
+  weather:
+    enabled: true
+  search:
+    enabled: true
+  calendar-google:
+    enabled: true
+  notify-slack:
+    enabled: true
+  maps:
+    enabled: true
+voice_id:
+  enabled: false
+  threshold: 0.72
+telegram:
+  enabled: false
+  bot_token: ''
+  allowed_chat_ids: []
+  min_interval_sec: 0.5
+  poll_interval_sec: 1.0
+  long_poll_timeout_sec: 20.0
 web:
   enabled: true
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 8005
   auth_token: ''
   log_tail_lines: 200
+runtime:
+  processor_priority:
+  - gpu
+  - cpu
+setup:
+  install_target: api

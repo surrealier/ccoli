@@ -3,25 +3,38 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ARDUINO_CLI_VERSION=1.1.1
 
+# python3-serial is required: the ESP32 core runs esptool.py to package the
+# binary at the end of every compile, and esptool imports pyserial on startup.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates python3 && \
+    curl ca-certificates python3 python3-serial && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Arduino CLI
 RUN curl -fsSL "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz" \
     | tar -xz -C /usr/local/bin arduino-cli
 
-# Install ESP32 core + required libraries
+# Install ESP32 core + every library the optional peripheral paths can pull in,
+# so the display variants below are really compiled instead of silently falling
+# back to the no-op stubs in display_control.cpp.
 RUN arduino-cli core update-index --additional-urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json && \
     arduino-cli core install m5stack:esp32@2.1.2 --additional-urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json && \
-    arduino-cli lib install "M5Unified" "ESP32Servo" "Adafruit SSD1306" "Adafruit GFX Library"
+    arduino-cli lib install "M5Unified" "ESP32Servo" "Adafruit SSD1306" "Adafruit GFX Library" "Adafruit ST7735 and ST7789 Library"
 
 WORKDIR /workspace
-COPY arduino/atom_echo_m5stack_esp32_ino /workspace/firmware
+# The destination directory name must match the main sketch file, otherwise
+# arduino-cli reports "main file missing from sketch" and never compiles.
+COPY arduino/atom_echo_m5stack_esp32_ino /workspace/atom_echo_m5stack_esp32_ino
+COPY docker/build-firmware-variants.sh /usr/local/bin/build-firmware-variants.sh
+# COPY ships the host's bytes, so a Windows checkout can hand us CRLF and the
+# shell then fails on `set -euo pipefail\r`. Normalize regardless of host.
+RUN sed -i 's/\r$//' /usr/local/bin/build-firmware-variants.sh && \
+    chmod +x /usr/local/bin/build-firmware-variants.sh
 
-# Create dummy device_secrets.h if missing
-RUN test -f /workspace/firmware/device_secrets.h || \
-    printf '#ifndef DEVICE_SECRETS_H\n#define DEVICE_SECRETS_H\nconst char* SSID = "test";\nconst char* PASS = "test";\nconst char* SERVER_IP = "0.0.0.0";\nconst uint16_t SERVER_PORT = 5001;\n#endif\n' \
-    > /workspace/firmware/device_secrets.h
+# Provide credential stand-ins when device_secrets.h is absent (it is git-ignored).
+# CONNECTION_MODE must be here too: config.h only declares it `extern`, and the
+# sketch defines it solely on the branch where device_secrets.h is missing.
+RUN test -f /workspace/atom_echo_m5stack_esp32_ino/device_secrets.h || \
+    printf '#ifndef DEVICE_SECRETS_H\n#define DEVICE_SECRETS_H\n#include <stdint.h>\nconst char* CONNECTION_MODE = "wired";\nconst char* SSID = "";\nconst char* PASS = "";\nconst char* SERVER_IP = "";\nconst uint16_t SERVER_PORT = 5001;\n#endif\n' \
+    > /workspace/atom_echo_m5stack_esp32_ino/device_secrets.h
 
-CMD ["arduino-cli", "compile", "--fqbn", "m5stack:esp32:m5stack_atom", "/workspace/firmware"]
+CMD ["/usr/local/bin/build-firmware-variants.sh"]

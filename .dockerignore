@@ -1,0 +1,36 @@
+# Keep local secrets out of image layers.
+# Dockerfile.firmware regenerates a credential-free device_secrets.h when the
+# file is absent, so excluding it here also makes CI builds reproducible.
+arduino/atom_echo_m5stack_esp32_ino/device_secrets.h
+server/.env
+**/*.env
+
+# Local state that must never influence a build
+.git
+.github
+.codex
+.claude
+.cursor
+.kiro
+**/__pycache__
+**/*.pyc
+.venv
+.pytest_cache
+**/.pytest_cache
+.pytest-tmp
+pytest-*
+server/logs
+server/memory
+server/context_backup
+wav_logs
+logs
+tmp
+output
+*.log
+
+# Private local state and generated artifacts
+models
+server/schedules.json
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.egg-info

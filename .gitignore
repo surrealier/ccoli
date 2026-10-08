@@ -1,6 +1,9 @@
 wav_logs/
 *.wav
 
+# Log output from scripts/run_docker_tests.sh
+artifacts/
+
 *.pyc
 __pycache__/
 .venv/
@@ -17,3 +20,18 @@ error_*.log
 .kiro/
 arduino/atom_echo_m5stack_esp32_ino/device_secrets.h
 server/.env
+
+# Isolated next-generation runtime, downloaded models and live diagnostics
+/output/nextgen-runtime/
+/server/**/personal.sqlite3
+/server/**/personal.sqlite3-*
+
+# Private local state and generated artifacts
+/models/
+/output/
+/server/schedules.json
+/.claude/
+*.egg-info/
+/pytest-*/
+/pytest-calendar-run/
+/tmp/

@@ -103,7 +103,7 @@ def test_generate_connection_greeting_falls_back_by_time():
     assert greeting == "콜리 연결됐어요! 잠 잘 주무셨어요?"
 
 
-def test_generate_response_uses_expanded_token_budget():
+def test_generate_response_uses_expanded_token_budget(caplog):
     class _FakeLLM:
         def __init__(self):
             self.kwargs = None
@@ -151,8 +151,10 @@ def test_generate_response_uses_expanded_token_budget():
     agent.max_history = 20
     agent.conversation_count = 0
 
-    response, intent = agent.generate_response("안녕")
+    caplog.set_level('INFO', logger='src.agent_mode')
+    response, intent = agent.generate_response('안녕')
 
     assert response == "좋아요."
     assert intent == "none"
-    assert agent.llm.kwargs["max_tokens"] == 768
+    assert agent.llm.kwargs['max_tokens'] == 768
+    assert '좋아요.' not in caplog.text

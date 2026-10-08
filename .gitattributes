@@ -1,0 +1,12 @@
+# The shell scripts below are committed with CRLF, and Docker COPY ships the
+# checkout verbatim, so bash inside the image failed on `set -euo pipefail\r`
+# ("invalid option name") on every platform. Pin LF for anything executed inside
+# a container or by a CI runner.
+*.sh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+
+# Binary media must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.mp4 binary

@@ -135,7 +135,7 @@ class EmotionSystem:
             self._apply_idle_bias(relation)
 
         dominant = self._recompute_current_emotion()
-        log.info("Emotion detected: %s (from text: %s...)", dominant, text[:30])
+        log.info("Emotion detected: %s", dominant)
         return dominant
 
     def _relation_for(self, speaker_id: str) -> dict[str, float]:

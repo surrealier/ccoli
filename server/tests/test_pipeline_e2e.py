@@ -14,8 +14,11 @@ class _FakeLLM:
 
 
 class _FakeEmotion:
-    def analyze_emotion(self, _t):
+    def analyze_emotion(self, _t, speaker_id="default"):
         return "neutral"
+
+    def set_body_state(self, *, sleep_mode=None, fatigue=None):
+        return None
 
 
 class _FakeProactive:

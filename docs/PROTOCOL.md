@@ -7,6 +7,14 @@ Every packet uses:
 - `2 bytes` payload length (little-endian)
 - `N bytes` payload
 
+The payload of a single frame is capped at `2048` bytes in both directions.
+The device receives into one fixed buffer (`RX_MAX_PACKET_PAYLOAD` in
+`arduino/atom_echo_m5stack_esp32_ino/config.h`) and drops longer frames as serial
+noise, so the server (`DEVICE_MAX_PACKET_PAYLOAD` in `server/src/protocol.py`)
+splits `AUDIO_OUT` into chunks at or under that size and refuses to send an
+oversized `CMD` rather than fragmenting it — each fragment would carry its own
+header and neither half would parse as JSON.
+
 ## Packet Types
 
 ### ESP32 -> Server
@@ -31,6 +39,7 @@ Every packet uses:
   - Wi-Fi/TCP: PCM16LE mono TTS chunk (`16kHz`)
   - Wired USB serial: G.711 mu-law mono TTS chunk (`8kHz`)
   - Wired USB compatibility path keeps chunks at `<= 512 bytes`
+  - Wi-Fi/TCP chunks stay at `<= 2048 bytes`
 - `0x1F` `PONG`
   - Keepalive response
 
@@ -58,13 +67,14 @@ Server sends JSON, for example:
 }
 ```
 
-Startup control messages may also use the same `CMD` channel, for example `{"action":"MIC_LOCK"}` and `{"action":"MIC_UNLOCK"}`.
+Playback control messages also use the same `CMD` channel. The server sends `{"action":"MIC_LOCK"}` immediately before TTS audio and `{"action":"MIC_UNLOCK"}` after the TTS payload has been queued.
 
 ## Connection Notes
 
 - ESP32 reconnect logic is handled on firmware side.
 - Server answers `PING` with `PONG`.
 - Wired USB mode may receive an initial `PONG` immediately after the serial port opens so the device can promote the link to ready before the first keepalive arrives.
+- Server-side greeting TTS waits until the ESP32 has sent `PING` and the server has replied with `PONG`; the initial serial `PONG` alone is not treated as enough to start playback.
 - The same packet framing is used over Wi-Fi/TCP and wired USB serial.
 - The default wired serial baudrate is `115200`; server and firmware must match.
 - Wired USB uses `8kHz mu-law` audio in both directions so speech capture and playback both fit inside `115200` baud on CP210x-class adapters.

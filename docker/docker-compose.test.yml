@@ -9,7 +9,12 @@ services:
     environment:
       - PYTHONPATH=/app/server
 
+  # `profiles` keeps these out of a bare `up`. Without it, `up
+  # --abort-on-container-exit --exit-code-from server-test` starts every service and
+  # the fastest one to finish tears down the pytest run before it reports.
+  # Launch them explicitly with `docker compose ... run --rm <service>`.
   client-sim:
+    profiles: ["manual"]
     build:
       context: ..
       dockerfile: docker/Dockerfile.test
@@ -19,7 +24,17 @@ services:
       - PYTHONPATH=/app/server
 
   firmware-build:
+    profiles: ["manual"]
     build:
       context: ..
       dockerfile: docker/Dockerfile.firmware
-    command: arduino-cli compile --fqbn m5stack:esp32:m5stack_atom /workspace/firmware
+    # Image CMD compiles every supported display/servo pin combination.
+
+  dashboard-test:
+    profiles: ["manual"]
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ../server/web/static/dashboard.js:/app/dashboard.js:ro
+      - ../server/tests/dashboard_auth_smoke.cjs:/app/dashboard_auth_smoke.cjs:ro
+    command: node dashboard_auth_smoke.cjs

@@ -194,7 +194,7 @@ class ProactiveInteraction:
         self.last_proactive = time.time()
         self.proactive_count += 1
         
-        log.info(f"Proactive message triggered (type: {selected_type}): {message}")
+        log.info("Proactive message triggered type=%s characters=%d", selected_type, len(message))
         return message
     
     def _get_time_greeting(self, hour: int) -> Optional[List[str]]:
@@ -244,7 +244,9 @@ class ProactiveInteraction:
         self.sleep_until = tomorrow.replace(hour=11, minute=0, second=0, microsecond=0)
         
         log.info(f"😴 수면 모드 진입 - {self.sleep_until.strftime('%Y-%m-%d %H:%M')}까지")
-        return f"알겠습니다. {self.sleep_until.strftime('%내일 오전 %H시')}까지 조용히 있을게요. 편안한 밤 되세요!"
+        # "내일 오전"은 리터럴 문구이므로 strftime 포맷에 넣지 않는다.
+        # '%내'는 유효한 지시자가 아니라 ValueError로 떨어진다.
+        return f"알겠습니다. 내일 오전 {self.sleep_until.hour}시까지 조용히 있을게요. 편안한 밤 되세요!"
     
     def pause_temporarily(self, hours: int = 1) -> str:
         """일시적으로 멈춤 (지정 시간 동안)"""

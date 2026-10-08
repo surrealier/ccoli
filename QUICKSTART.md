@@ -46,11 +46,24 @@ No extra config is required for wired mode:
 - The default wired serial speed is `115200` for broad CP210x stability
 - Wired USB audio uses `8kHz G.711 mu-law` in both directions so STT capture and TTS playback fit inside the wired bandwidth budget
 - Arduino IDE upload speed can remain `115200`; it does not need to match the runtime protocol settings
-- The server temporarily locks the mic while the first greeting is sent, then the firmware reopens it after playback
+- The server waits for the first ESP32 `PING`/`PONG` handshake before sending the first greeting, then brackets playback with `MIC_LOCK`/`MIC_UNLOCK`
 
-Optional robot/display mode only:
-- Install Arduino libraries `Adafruit SSD1306` and `Adafruit GFX Library`
-- Wire the SSD1306 OLED to `G25` (SDA) and `G21` (SCL)
+Optional robot/display peripherals:
+
+The Atom Echo only exposes `G21`/`G25`/`G26`/`G32` — `G19`/`G22`/`G23`/`G33` belong to the
+I2S mic and speaker. Every add-on shares those four pins, so pick one row of
+`DISPLAY_TYPE` in `arduino/atom_echo_m5stack_esp32_ino/config.h`:
+
+| `DISPLAY_TYPE` | Display | Display pins | Local servos | Extra Arduino libraries |
+|---|---|---|---|---|
+| `0` (default) | none | — | `G26` pitch, `G32` tilt | none |
+| `1` | SSD1306 OLED (I2C) | `G25` SDA, `G21` SCL | `G26` pitch, `G32` tilt | `Adafruit SSD1306`, `Adafruit GFX Library` |
+| `2` | Waveshare ST7789V2 LCD (SPI) | `G25` DIN, `G21` CLK, `G26` CS, `G32` DC | disabled — no pins left | `Adafruit ST7735 and ST7789 Library`, `Adafruit GFX Library` |
+
+Setting `DISPLAY_TYPE 2` turns local servo output off automatically, because the SPI
+panel needs all four free pins. To drive an LCD *and* servos, move both to a companion
+board (`ROBOT_BRIDGE_ENABLED 1`, Grove `G26`/`G32` become UART TX/RX) — see
+[docs/ROBOT_MODE_WAVESHARE_PRD.md](docs/ROBOT_MODE_WAVESHARE_PRD.md).
 
 ## 3. Start server
 
@@ -62,7 +75,7 @@ Then connect the Atom Echo to your PC with USB-C.
 - The server preloads STT and TTS during startup so the first turn avoids the cold-start model penalty.
 - If the web dashboard is enabled and its dependencies are installed, startup logs print the dashboard URL(s) and the `/api/docs` link.
 - LED status: red before the server link is ready, light green once the server connection is healthy.
-- On the first healthy connection, ccoli plays a short time-of-day welcome greeting without calling the LLM.
+- On the first healthy `PING`/`PONG` handshake, ccoli plays a short time-of-day welcome greeting without calling the LLM.
 
 Optional temporary port override:
 
@@ -109,7 +122,7 @@ These can be spoken to the device or typed in the web chat:
 
 ```text
 @@우선순위 상태
-모델 우선순위 ollama > api > ollama cpu > other
+모델 우선순위 api > ollama > ollama cpu > other
 api 우선순위 gemini > claude > chatgpt
 연결 우선순위 wired > wifi
 프로세서 우선순위 gpu > cpu
@@ -117,12 +130,13 @@ api 우선순위 gemini > claude > chatgpt
 
 Notes:
 - `Wired > WiFi` is live in `auto` mode, so the server keeps checking both paths and connects to the first healthy link it finds.
-- LLM routing is selected once after startup or priority/config reload. If local Ollama is unavailable and Gemini succeeds, later turns keep using Gemini instead of rechecking Ollama every time.
-- Runtime LLM thinking is disabled for voice responses. Gemini calls send `thinkingBudget: 0`, and regular agent responses use a larger output token budget to reduce mid-sentence truncation.
+- The project config prefers the API with a configured key, then local Ollama; the chosen route is reused until it fails or settings change. Use the CLI to select a different provider and update its priority.
+- Voice responses request short reasoning. Gemini 3.x uses `thinkingLevel: low`; older Gemini 2.5 models use `thinkingBudget: 0`. The client retries once if the provider reaches its output token limit.
 - `GPU > CPU` applies directly to STT and local-LLM preference ordering.
 - On macOS, `GPU` priority can still matter for local LLM routing, but the current STT/TTS stack does not run on Apple `MPS`.
 - `ollama_cpu` is a separate runtime bucket, but it becomes a truly separate physical path only when you provide a CPU-only local Ollama instance.
 - Current TTS default is `edge_tts`, so processor priority is recorded and exposed, but Edge TTS itself does not select a local GPU/CPU backend.
+- To select the latest Gemini 3.8 Flash-Lite voice, set `TTS_BACKEND=gemini_tts`, `TTS_MODEL=gemini-3.8-flash-lite-tts`, and `TTS_GEMINI_VOICE=Kore` alongside `GEMINI_API_KEY`, then restart. On this PC its measured generation time was slower than Edge; keep `edge_tts` for the quickest audible response.
 
 ## 6. Current mode support
 
@@ -179,3 +193,7 @@ python scripts/evaluate_poc.py --tool ralph
 
 By default the server also serves a multilingual dashboard at `http://localhost:8005` with `English` as the default UI, optional `한국어 / 日本語 / 中文` switching, runtime diagnostics, memory/schedule/chat views, and live logs.
 When the server binds to `0.0.0.0`, startup logs also print a LAN URL if one is detected.
+
+## Next-generation personal and home agent
+
+This project's standard configuration enables the bounded personal tool engine and binds the dashboard to `127.0.0.1`. On this PC, dashboard authentication is enabled through the private `server/.env`; enter its `WEB_AUTH_TOKEN` once under Diagnostics > Advanced and save it. REST and live events require the same token. Keep it out of URLs and logs. Set `AGENT_ENABLED=false` to use the earlier conversation flow. To access the dashboard from another device, configure authentication and an explicit `WEB_HOST` network address. See the [usage guide](docs/NEXTGEN_AGENT_GUIDE.md), [PRD](docs/NEXTGEN_AGENT_PRD.md), [execution plan](docs/NEXTGEN_AGENT_PLAN.md), and [verification record](docs/NEXTGEN_AGENT_VERIFICATION.md).

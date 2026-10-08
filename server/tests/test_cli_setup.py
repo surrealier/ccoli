@@ -200,3 +200,56 @@ def test_calendar_integration_set_writes_oauth_to_env(tmp_path, monkeypatch):
     assert "GOOGLE_REFRESH_TOKEN=refresh-token" in env_text
 
     assert _cmd_config_integration_test("calendar-google") == 0
+
+
+def test_setup_api_defaults_match_runtime_defaults():
+    from src.runtime_preferences import DEFAULT_API_MODELS
+
+    for provider, expected in DEFAULT_API_MODELS.items():
+        assert DEFAULT_LLM_MODELS[provider] == expected
+
+
+def test_setup_local_default_matches_verified_runtime_model():
+    from src.runtime_preferences import DEFAULT_OLLAMA_MODEL
+    assert DEFAULT_LLM_MODELS['ollama'] == DEFAULT_OLLAMA_MODEL == 'qwen3.5:4b'
+
+
+def test_cli_provider_selection_sets_matching_runtime_priority(tmp_path):
+    from ccoli.cli import _configure_llm
+
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    (server_dir / "config.yaml").write_text(
+        "llm:\n  priority: [ollama, api, ollama_cpu, other]\n"
+        "  api_priority: [gemini, claude, chatgpt]\n",
+        encoding="utf-8",
+    )
+
+    path = _configure_llm(tmp_path, "claude", "claude-haiku-4-5-20251001", None, None)
+    selected = yaml.safe_load(path.read_text(encoding="utf-8"))["llm"]
+    assert selected["priority"][:2] == ["api", "ollama"]
+    assert selected["api_priority"][0] == "claude"
+
+    path = _configure_llm(tmp_path, "ollama", "qwen3.5:4b", None, None)
+    selected = yaml.safe_load(path.read_text(encoding="utf-8"))["llm"]
+    assert selected["priority"][:2] == ["ollama", "api"]
+
+
+def test_cli_provider_selection_updates_model_table(tmp_path):
+    from ccoli.cli import _configure_llm
+
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    (server_dir / "config.yaml").write_text(
+        "llm:\n  ollama_model: old-local\n"
+        "  api_models:\n    gemini: old-gemini\n    claude: old-claude\n",
+        encoding="utf-8",
+    )
+
+    path = _configure_llm(tmp_path, "gemini", "gemini-3.8-flash", None, None)
+    selected = yaml.safe_load(path.read_text(encoding="utf-8"))["llm"]
+    assert selected["api_models"]["gemini"] == "gemini-3.8-flash"
+
+    path = _configure_llm(tmp_path, "ollama", "qwen3.5:4b", None, None)
+    selected = yaml.safe_load(path.read_text(encoding="utf-8"))["llm"]
+    assert selected["ollama_model"] == "qwen3.5:4b"

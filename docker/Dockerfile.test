@@ -9,4 +9,16 @@ COPY ccoli /app/ccoli
 COPY server /app/server
 RUN pip install --no-cache-dir -e '/app[runtime,test]'
 
+# The suite reaches outside server/ as well: firmware config parity reads
+# arduino/, the dashboard asset check reads assets/, and the bootstrap tests
+# execute scripts/install.sh. Without these the tests fail on a missing path
+# rather than on a real regression.
+COPY arduino /app/arduino
+COPY assets /app/assets
+COPY scripts /app/scripts
+
+# COPY ships the host's bytes, so a Windows checkout can hand these over with
+# CRLF and bash then fails on `set -euo pipefail\r`. Normalize regardless of host.
+RUN find /app/scripts -name '*.sh' -exec sed -i 's/\r$//' {} +
+
 WORKDIR /app

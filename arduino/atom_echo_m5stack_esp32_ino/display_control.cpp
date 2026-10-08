@@ -56,6 +56,13 @@ static int gaze_x = 0, gaze_y = 0;
 static DisplayState prev_state = DS_BOOT;
 static FaceType prev_face = FACE_NEUTRAL;
 
+// draw_face()/draw_speaking() open with a full-screen fill: 240x280x2 bytes over
+// SPI, tens of milliseconds during which the shared main loop cannot service
+// M5.Mic.record() or the socket. Those two screens are static between events, so
+// they are repainted only when something visible actually changed. The remaining
+// states animate off millis() and still redraw every frame.
+static bool needs_redraw = true;
+
 static const unsigned long DRAW_MS = 66; // ~15fps
 
 // ── Screen layout constants ──
@@ -354,6 +361,7 @@ void display_init() {
   lcd_ready = true;
   state_enter_ms = millis();
   last_emotion_ms = millis();
+  needs_redraw = true;
 }
 
 void display_set_state(DisplayState state) {
@@ -361,25 +369,32 @@ void display_set_state(DisplayState state) {
     prev_state = cur_state;
     cur_state = state;
     state_enter_ms = millis();
+    needs_redraw = true;
   }
 }
 
 void display_show_face(FaceType face) {
+  if (face != cur_face) needs_redraw = true;
   cur_face = face;
   last_emotion_ms = millis();
   if (cur_state == DS_IDLE || cur_state == DS_SPEAKING)
     return; // face will be drawn in next update
   cur_state = DS_IDLE;
   state_enter_ms = millis();
+  needs_redraw = true;
 }
 
 void display_set_status_text(const char* text) {
-  strncpy(status_text, text ? text : "", sizeof(status_text) - 1);
+  const char* incoming = text ? text : "";
+  if (strncmp(status_text, incoming, sizeof(status_text) - 1) != 0) needs_redraw = true;
+  strncpy(status_text, incoming, sizeof(status_text) - 1);
   status_text[sizeof(status_text) - 1] = '\0';
 }
 
 void display_set_speech_text(const char* text) {
-  strncpy(speech_text, text ? text : "", sizeof(speech_text) - 1);
+  const char* incoming = text ? text : "";
+  if (strncmp(speech_text, incoming, sizeof(speech_text) - 1) != 0) needs_redraw = true;
+  strncpy(speech_text, incoming, sizeof(speech_text) - 1);
   speech_text[sizeof(speech_text) - 1] = '\0';
 }
 
@@ -398,6 +413,7 @@ void display_update() {
   if (now - last_blink_ms > blink_interval) {
     blink_state = !blink_state;
     last_blink_ms = now;
+    needs_redraw = true;
   }
 
   // Gaze shift (idle/speaking only)
@@ -406,30 +422,37 @@ void display_update() {
       gaze_x = random(-6, 7);
       gaze_y = random(-3, 4);
       last_gaze_ms = now;
+      needs_redraw = true;
     }
-  } else {
+  } else if (gaze_x != 0 || gaze_y != 0) {
     gaze_x = 0; gaze_y = 0;
+    needs_redraw = true;
   }
 
   // Emotion decay
   if (cur_state == DS_IDLE && cur_face != FACE_NEUTRAL && (now - last_emotion_ms > EMOTION_DECAY_INTERVAL_MS)) {
     cur_face = FACE_NEUTRAL;
     status_text[0] = '\0';
+    needs_redraw = true;
   }
 
   switch (cur_state) {
+    // millis()-driven animations: every frame differs, so always repaint.
     case DS_BOOT:       draw_boot(); break;
     case DS_CONNECTING: draw_connecting(); break;
-    case DS_IDLE:       draw_face(); break;
     case DS_LISTENING:  draw_listening(); break;
     case DS_PROCESSING: draw_processing(); break;
-    case DS_SPEAKING:   draw_speaking(); break;
+    // Event-driven screens: repaint only on a real change.
+    case DS_IDLE:       if (needs_redraw) draw_face(); break;
+    case DS_SPEAKING:   if (needs_redraw) draw_speaking(); break;
   }
+  needs_redraw = false;
 }
 
 void display_clear() {
   if (!lcd_ready) return;
   tft.fillScreen(0);
+  needs_redraw = true;
 }
 
 #else // CCOLI_HAS_ST7789 == 0 (library not installed)

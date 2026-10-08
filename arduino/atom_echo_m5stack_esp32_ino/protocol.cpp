@@ -21,19 +21,21 @@
 #include <M5Unified.h>
 #include <ctype.h>
 #include <string.h>
-#include <stdlib.h>
 
 // ── 버퍼 크기 상수 ──
-static constexpr size_t RX_MAX_PAYLOAD = 2048;  // CMD 등 일반 패킷 최대 크기
+// RX_MAX_PAYLOAD는 서버가 한 프레임에 실어 보내는 최대 페이로드와 맞춘다.
+// (server/src/protocol.py: DEVICE_MAX_PACKET_PAYLOAD)
+// 정적 버퍼 하나로 모든 패킷을 받으므로 힙 단편화가 생기지 않고,
+// 시리얼 노이즈로 만들어진 과대 길이 헤더도 버퍼를 넘길 수 없다.
+#ifndef RX_MAX_PACKET_PAYLOAD
+#define RX_MAX_PACKET_PAYLOAD 2048
+#endif
+static constexpr size_t RX_MAX_PAYLOAD = RX_MAX_PACKET_PAYLOAD;
 
 #ifndef AUDIO_RING_BUFFER_SIZE
 #define AUDIO_RING_BUFFER_SIZE 32768
 #endif
 static constexpr size_t AUDIO_PLAY_BUFFER_SIZE = AUDIO_RING_BUFFER_SIZE;
-
-#ifndef RX_AUDIO_MAX_ALLOC
-#define RX_AUDIO_MAX_ALLOC 16384  // 대형 오디오 패킷 동적 할당 상한
-#endif
 
 // ── 수신 상태머신 ──
 // 패킷 구조: [1B type][2B length LE][length B payload]
@@ -43,11 +45,8 @@ static RxStage rx_stage = RX_TYPE;
 static uint8_t rx_type = 0;       // 현재 수신 중인 패킷 타입
 static uint16_t rx_len = 0;       // 현재 패킷의 페이로드 길이
 static uint16_t rx_pos = 0;       // 현재까지 수신한 페이로드 바이트 수
-static uint8_t rx_buf[RX_MAX_PAYLOAD];  // 일반 패킷 수신 버퍼 (정적)
-
-// 대형 오디오 패킷용 동적 버퍼 (RX_MAX_PAYLOAD 초과 시 사용)
-static uint8_t* rx_audio_buf = nullptr;
-static size_t rx_audio_buf_size = 0;
+static bool rx_overflow = false;  // rx_len이 버퍼보다 큰 패킷(=손상 프레임) 표시
+static uint8_t rx_buf[RX_MAX_PAYLOAD];  // 모든 패킷 공용 수신 버퍼 (정적)
 
 // ── TTS 오디오 링 버퍼 ──
 // 서버에서 스트리밍되는 TTS PCM 데이터를 저장하고
@@ -448,6 +447,7 @@ void protocol_init() {
   rx_stage = RX_TYPE;
   rx_len = 0;
   rx_pos = 0;
+  rx_overflow = false;
   last_ping_ms = 0;
   last_peer_rx_ms = 0;
   capture_locked = false;
@@ -504,44 +504,40 @@ bool protocol_send_packet(Stream& transport, uint8_t type, const uint8_t* payloa
 
 // protocol_poll — 서버에서 수신된 패킷을 폴링하여 핸들러에 디스패치
 // 상태머신: RX_TYPE → RX_LEN0 → RX_LEN1 → RX_PAYLOAD → 핸들러 → RX_TYPE
-// 페이로드 단계에서는 벌크 읽기(client.read(buf, n))로 성능 최적화
+// 헤더 3바이트만 1바이트씩 읽고, 페이로드는 readBytes()로 한 번에 받는다.
 void protocol_poll(Stream& transport) {
   while (transport.available() > 0) {
-    // ── 벌크 읽기: 대형 오디오 패킷 (AUDIO_OUT, >2KB) ──
-    if (rx_stage == RX_PAYLOAD && rx_type == PTYPE_AUDIO_OUT && rx_len > RX_MAX_PAYLOAD) {
-      if (rx_audio_buf && rx_pos < rx_len) {
-        size_t want = rx_len - rx_pos;
-        int avail = transport.available();
-        if ((size_t)avail < want) want = avail;
-        size_t got = transport.readBytes((char*)(rx_audio_buf + rx_pos), want);
-        if (got == 0) break;
-        rx_pos += got;
-        if (rx_pos >= rx_len) {
-          last_peer_rx_ms = millis();
-          handleAudioOut(rx_audio_buf, rx_len);
-          rx_stage = RX_TYPE;
-        }
-        continue;
-      }
-    }
+    // ── 벌크 읽기: 모든 페이로드 (AUDIO_OUT / CMD 공통) ──
+    // 바이트 단위 read()는 TTS 한 청크마다 수천 번 호출돼 재생이 끊기므로,
+    // 페이로드 단계는 항상 readBytes()로 한 번에 받는다.
+    if (rx_stage == RX_PAYLOAD) {
+      size_t want = (size_t)(rx_len - rx_pos);
+      size_t avail = (size_t)transport.available();
+      if (avail == 0) break;
+      if (want > avail) want = avail;
 
-    // ── 벌크 읽기: 일반 패킷 (CMD 등, ≤2KB) ──
-    if (rx_stage == RX_PAYLOAD && rx_type != PTYPE_AUDIO_OUT) {
-      size_t want = rx_len - rx_pos;
-      if (want > RX_MAX_PAYLOAD - rx_pos) want = RX_MAX_PAYLOAD - rx_pos;
-      int avail = transport.available();
-      if ((size_t)avail < want) want = avail;
-      if (want > 0) {
-        size_t got = transport.readBytes((char*)(rx_buf + rx_pos), want);
-        if (got == 0) break;
-        rx_pos += got;
-        if (rx_pos >= rx_len) {
-          last_peer_rx_ms = millis();
-          if (rx_type == PTYPE_CMD) handleCmdJson(rx_buf, rx_len);
-          rx_stage = RX_TYPE;
-        }
-        continue;
+      size_t got;
+      if (rx_overflow) {
+        // 버퍼보다 큰 길이 = 손상된 헤더. 스트림에서 흘려보내고 재동기화한다.
+        uint8_t sink[64];
+        size_t take = (want < sizeof(sink)) ? want : sizeof(sink);
+        got = transport.readBytes((char*)sink, take);
+      } else {
+        got = transport.readBytes((char*)(rx_buf + rx_pos), want);
       }
+      if (got == 0) break;
+      rx_pos += got;
+
+      if (rx_pos >= rx_len) {
+        last_peer_rx_ms = millis();
+        if (!rx_overflow) {
+          if (rx_type == PTYPE_CMD) handleCmdJson(rx_buf, rx_len);
+          else if (rx_type == PTYPE_AUDIO_OUT) handleAudioOut(rx_buf, rx_len);
+        }
+        rx_overflow = false;
+        rx_stage = RX_TYPE;
+      }
+      continue;
     }
 
     // ── 헤더 바이트 읽기 (1바이트씩, 3B만) ──
@@ -573,42 +569,16 @@ void protocol_poll(Stream& transport) {
           last_peer_rx_ms = millis();
           rx_stage = RX_TYPE;
         } else {
-          rx_stage = RX_PAYLOAD;
-          // 대형 오디오 패킷: 동적 버퍼 할당 (상한 RX_AUDIO_MAX_ALLOC)
-          if (rx_type == PTYPE_AUDIO_OUT && rx_len > RX_MAX_PAYLOAD) {
-            size_t alloc_sz = (rx_len > RX_AUDIO_MAX_ALLOC) ? RX_AUDIO_MAX_ALLOC : rx_len;
-            if (!rx_audio_buf || rx_audio_buf_size < alloc_sz) {
-              if (rx_audio_buf) free(rx_audio_buf);
-              rx_audio_buf = (uint8_t*)malloc(alloc_sz);
-              rx_audio_buf_size = rx_audio_buf ? alloc_sz : 0;
-            }
-            if (!rx_audio_buf) {
-              rx_stage = RX_TYPE;  // 할당 실패 → 패킷 스킵
-            }
+          rx_overflow = (rx_len > RX_MAX_PAYLOAD);
+          if (rx_overflow) {
+            DEBUG_PRINTLN("[PROTO] payload exceeds RX buffer; dropping frame");
           }
+          rx_stage = RX_PAYLOAD;
         }
         break;
 
       case RX_PAYLOAD:
-        // 단일 바이트 fallthrough (벌크 읽기에서 처리 안 된 잔여)
-        if (rx_type == PTYPE_AUDIO_OUT && rx_len > RX_MAX_PAYLOAD) {
-          if (rx_audio_buf && rx_pos < rx_audio_buf_size) {
-            rx_audio_buf[rx_pos] = byte;
-          }
-        } else {
-          if (rx_pos < RX_MAX_PAYLOAD) rx_buf[rx_pos] = byte;
-        }
-        rx_pos++;
-        if (rx_pos >= rx_len) {
-          // 페이로드 수신 완료 → 핸들러 디스패치
-          last_peer_rx_ms = millis();
-          if (rx_type == PTYPE_CMD) handleCmdJson(rx_buf, rx_len);
-          else if (rx_type == PTYPE_AUDIO_OUT) {
-            if (rx_len > RX_MAX_PAYLOAD) handleAudioOut(rx_audio_buf, rx_len);
-            else handleAudioOut(rx_buf, rx_len);
-          }
-          rx_stage = RX_TYPE;
-        }
+        // 위 벌크 경로가 RX_PAYLOAD를 전부 처리하므로 여기에는 도달하지 않는다.
         break;
     }
   }

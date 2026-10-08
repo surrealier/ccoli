@@ -16,6 +16,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from queue import Empty
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
+from typing import Callable
 
 import numpy as np
 import yaml
@@ -55,6 +58,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 SR = 16000
 UNSURE_POLICY = "NOOP"
 CONNECTION_GREETING_TTS_PAD_MS = 180.0
+CONNECTION_GREETING_READY_TIMEOUT_S = 3.0
 TTS_CHUNK_EDGE_PAD_MS = 180.0
 TTS_CHUNK_MIDDLE_PAD_MS = 60.0
 TTS_FALLBACK_PAD_MS = 180.0
@@ -394,10 +398,15 @@ def _send_connection_greeting(
     agent,
     runtime_state: dict | None = None,
     input_gate: InputGate | None = None,
+    ready_event: threading.Event | None = None,
 ) -> bool:
     log = __import__("logging").getLogger("server")
 
     if current_mode != "agent" or agent is None:
+        return False
+
+    if ready_event is not None and not ready_event.wait(CONNECTION_GREETING_READY_TIMEOUT_S):
+        log.info("Skipping connection greeting until device handshake is ready")
         return False
 
     if runtime_state is not None and runtime_state.get("connection_greeting_sent"):
@@ -407,32 +416,31 @@ def _send_connection_greeting(
         log.info("Skipping connection greeting while input stream is active")
         return False
 
-    lock_sent = send_action(conn, {"action": "MIC_LOCK"}, send_lock)
-    if not lock_sent:
-        log.warning("Failed to lock mic before connection greeting")
-        return False
-
     greeting = agent.generate_connection_greeting()
     if not greeting:
-        send_action(conn, {"action": "MIC_UNLOCK"}, send_lock)
         return False
 
     wav_bytes = agent.text_to_audio(greeting, trim_pad_ms=CONNECTION_GREETING_TTS_PAD_MS)
     if not wav_bytes:
         log.warning("Connection greeting TTS generation returned empty audio")
-        send_action(conn, {"action": "MIC_UNLOCK"}, send_lock)
         return False
 
     if input_gate is not None and (input_gate.has_active_stream() or input_gate.is_busy()):
         log.info("Dropping connection greeting because input stream became active")
-        send_action(conn, {"action": "MIC_UNLOCK"}, send_lock)
+        return False
+
+    lock_sent = send_action(conn, {"action": "MIC_LOCK"}, send_lock)
+    if not lock_sent:
+        log.warning("Failed to lock mic before connection greeting")
         return False
 
     ok = send_audio(conn, wav_bytes, send_lock)
     if ok:
         if runtime_state is not None:
             runtime_state["connection_greeting_sent"] = True
-        log.info("Connection greeting sent: %s", greeting)
+        log.info("Connection greeting sent")
+        if not send_action(conn, {"action": "MIC_UNLOCK"}, send_lock):
+            log.warning("Failed to unlock mic after connection greeting")
     else:
         log.warning("Failed to send connection greeting audio")
         send_action(conn, {"action": "MIC_UNLOCK"}, send_lock)
@@ -459,10 +467,11 @@ def _start_connection_greeting(
     agent,
     runtime_state: dict | None = None,
     input_gate: InputGate | None = None,
+    ready_event: threading.Event | None = None,
 ):
     thread = threading.Thread(
         target=_send_connection_greeting,
-        args=(conn, send_lock, agent, runtime_state, input_gate),
+        args=(conn, send_lock, agent, runtime_state, input_gate, ready_event),
         daemon=True,
         name="connection-greeting",
     )
@@ -470,11 +479,69 @@ def _start_connection_greeting(
     return thread
 
 
-def _send_tts_chunks(conn, send_lock: threading.Lock, audio_payloads: list[bytes]) -> bool:
+def _log_voice_latency(
+    stage: str, sid: int, started: float, recorder: Callable[[float], None] | None = None
+) -> None:
+    """Record elapsed time without including speech, model output, or credentials."""
+    duration = time.perf_counter() - started
+    if recorder is not None:
+        recorder(duration)
+    logging.getLogger("server").info(
+        "VOICE_LATENCY sid=%s stage=%s duration_ms=%.1f", sid, stage, duration * 1000.0
+    )
+
+
+def _has_sustained_voice_energy(pcm: np.ndarray) -> bool:
+    """Allow brief quiet gaps within a local 240 ms voice interval."""
+    window_samples = SR // 50
+    threshold_power = 10 ** (-45.0 / 10.0)
+    active_windows: list[bool] = []
+    for offset in range(0, len(pcm) - window_samples + 1, window_samples):
+        window = pcm[offset : offset + window_samples]
+        active_windows.append(float(np.mean(window * window)) >= threshold_power)
+        if len(active_windows) >= 12 and sum(active_windows[-12:]) >= 9:
+            return True
+    return False
+
+
+def _voice_rejection_reason(
+    duration_s: float, rms_db: float | None = None, pcm: np.ndarray | None = None
+) -> str | None:
+    """Classify a pre-STT filter without retaining the captured audio."""
+    if duration_s < 0.45:
+        return "too_short"
+    if rms_db is not None and rms_db < -45.0:
+        if pcm is None or not _has_sustained_voice_energy(pcm):
+            return "too_quiet"
+    return None
+
+
+def _log_voice_rejection(sid: int, reason: str, duration_s: float, rms_db: float | None = None) -> None:
+    """Log only numeric input diagnostics and a fixed reason code."""
+    log = logging.getLogger("server")
+    if rms_db is None:
+        log.info("VOICE_INPUT sid=%s status=filtered reason=%s duration_ms=%.1f", sid, reason, duration_s * 1000.0)
+    else:
+        log.info("VOICE_INPUT sid=%s status=filtered reason=%s duration_ms=%.1f rms_db=%.1f", sid, reason, duration_s * 1000.0, rms_db)
+
+
+def _send_tts_chunks(
+    conn,
+    send_lock: threading.Lock,
+    audio_payloads: list[bytes],
+    ready_event: threading.Event | None = None,
+    *,
+    turn_started: float | None = None,
+    sid: int = 0,
+) -> bool:
     log = __import__("logging").getLogger("server")
 
     payloads = [chunk for chunk in audio_payloads if chunk]
     if not payloads:
+        return False
+
+    if ready_event is not None and not ready_event.is_set():
+        log.warning("Skipping TTS playback because device handshake is not ready")
         return False
 
     lock_sent = send_action(conn, {"action": "MIC_LOCK"}, send_lock)
@@ -491,12 +558,16 @@ def _send_tts_chunks(conn, send_lock: threading.Lock, audio_payloads: list[bytes
                 total_audio_chunks,
                 len(chunk_bytes),
             )
+        if idx == 1 and turn_started is not None:
+            _log_voice_latency("end_to_send", sid, turn_started)
         ok = send_audio(conn, chunk_bytes, send_lock)
         if not ok:
             log.warning("Failed to send audio chunk %d/%d", idx, total_audio_chunks)
             send_action(conn, {"action": "MIC_UNLOCK"}, send_lock)
             return False
 
+    if not send_action(conn, {"action": "MIC_UNLOCK"}, send_lock):
+        log.warning("Failed to unlock mic after TTS playback")
     return True
 
 
@@ -515,27 +586,42 @@ def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3) ->
     total_chunks = len(tts_text_chunks)
     failed_chunks = []
 
-    for idx, tts_text in enumerate(tts_text_chunks, start=1):
-        trim_pad_ms = TTS_CHUNK_EDGE_PAD_MS
-        if total_chunks > 1:
-            if idx == 1 or idx == total_chunks:
-                trim_pad_ms = TTS_CHUNK_EDGE_PAD_MS
-            else:
-                trim_pad_ms = TTS_CHUNK_MIDDLE_PAD_MS
-        wav_bytes = agent.text_to_audio(
-            tts_text,
-            trim_pad_ms=trim_pad_ms,
+    def synthesize(item: tuple[int, str]) -> bytes:
+        idx, tts_text = item
+        trim_pad_ms = (
+            TTS_CHUNK_MIDDLE_PAD_MS
+            if 1 < idx < total_chunks
+            else TTS_CHUNK_EDGE_PAD_MS
         )
+        # Each pool worker owns its event loop; text_to_audio uses thread-local
+        # loops and unique temporary files. Close loops before workers exit.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            try:
+                return agent.text_to_audio(tts_text, trim_pad_ms=trim_pad_ms)
+            except Exception as exc:
+                log.error("TTS chunk raised %s (%d/%d)", type(exc).__name__, idx, total_chunks)
+                return b""
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    indexed_chunks = list(enumerate(tts_text_chunks, start=1))
+    if total_chunks == 1:
+        synthesized = [agent.text_to_audio(
+            tts_text_chunks[0], trim_pad_ms=TTS_CHUNK_EDGE_PAD_MS,
+        )]
+    else:
+        with ThreadPoolExecutor(max_workers=min(3, total_chunks), thread_name_prefix="tts") as pool:
+            synthesized = list(pool.map(synthesize, indexed_chunks))
+
+    for (idx, tts_text), wav_bytes in zip(indexed_chunks, synthesized):
         if wav_bytes:
             audio_chunks.append(wav_bytes)
         else:
             failed_chunks.append(tts_text)
-            log.error(
-                "TTS chunk failed (%d/%d): %s",
-                idx,
-                total_chunks,
-                tts_text,
-            )
+            log.error("TTS chunk failed (%d/%d)", idx, total_chunks)
 
     if not audio_chunks:
         log.error("All TTS chunks failed")
@@ -550,7 +636,8 @@ def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3) ->
         fallback_audio = agent.text_to_audio(fallback_text, trim_pad_ms=TTS_FALLBACK_PAD_MS)
         if fallback_audio:
             return [fallback_audio]
-        return audio_chunks
+        log.error("Refusing incomplete TTS playback after full fallback failed")
+        return []
 
     if len(audio_chunks) == 1:
         return audio_chunks
@@ -634,19 +721,16 @@ def handle_connection(
     state = {"sid": 0, "current_angle": 90}
     state_lock = threading.Lock()
     stop_event = threading.Event()
+    connection_ready = threading.Event()
     input_gate = InputGate()
     connection_greeting_thread = None
     connection_greeting_attempted = False
 
-    if current_mode == "agent":
-        connection_greeting_thread = _start_connection_greeting(
-            conn,
-            send_lock,
-            agent_handler,
-            runtime_state,
-            input_gate,
-        )
-        connection_greeting_attempted = connection_greeting_thread is not None
+    def mark_connection_ready(source: str) -> None:
+        if connection_ready.is_set():
+            return
+        connection_ready.set()
+        log.info("Device handshake ready via %s; TTS playback enabled", source)
 
     def worker():
         global current_mode
@@ -659,11 +743,13 @@ def handle_connection(
             if job is None:
                 return
 
-            sid, data = job
+            sid, data, turn_started = job
             sec = len(data) / 2 / SR
 
             try:
-                if sec < 0.45:
+                short_reason = _voice_rejection_reason(sec)
+                if short_reason is not None:
+                    _log_voice_rejection(sid, short_reason, sec)
                     if current_mode == "robot":
                         action = {
                             "action": "NOOP" if UNSURE_POLICY == "NOOP" else "WIGGLE",
@@ -679,7 +765,9 @@ def handle_connection(
                 rms_db, peak, clip = qc(pcm)
                 log.debug("QC sid=%s rms=%.1fdBFS peak=%.3f clip=%.2f%%", sid, rms_db, peak, clip)
 
-                if rms_db < -45.0:
+                quiet_reason = _voice_rejection_reason(sec, rms_db, pcm)
+                if quiet_reason is not None:
+                    _log_voice_rejection(sid, quiet_reason, sec, rms_db)
                     if current_mode == "robot":
                         action = {
                             "action": "NOOP" if UNSURE_POLICY == "NOOP" else "WIGGLE",
@@ -702,17 +790,17 @@ def handle_connection(
                 # STT processing and text cleanup
                 text = ""
                 try:
-                    stt_start = time.time()
+                    stt_start = time.perf_counter()
                     segments, _ = stt_engine.safe_transcribe(pcm)
                     text = clean_text("".join(seg.text for seg in segments))
-                    perf_logger.log_stt(time.time() - stt_start)
+                    _log_voice_latency("stt", sid, stt_start, perf_logger.log_stt)
                 except Exception as exc:
                     log.exception("Transcribe failed sid=%s: %s", sid, exc)
                     perf_logger.log_error()
                     continue
 
                 if text:
-                    log.info("STT: %s (Mode: %s)", text, current_mode)
+                    log.info("STT accepted sid=%s characters=%d mode=%s", sid, len(text), current_mode)
                 else:
                     log.info("STT: (empty/filtered)")
 
@@ -722,21 +810,21 @@ def handle_connection(
                         msg = voice_id_service.begin_register(user)
                         wav_bytes = agent_handler.text_to_audio(msg)
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
                         continue
                     if text.startswith("@@") and "화자 인식 켜" in text:
                         voice_id_service.set_enabled(True)
                         wav_bytes = agent_handler.text_to_audio("화자 인식을 켰어요.")
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
                         continue
                     if text.startswith("@@") and "화자 인식 꺼" in text:
                         voice_id_service.set_enabled(False)
                         wav_bytes = agent_handler.text_to_audio("화자 인식을 껐어요.")
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
                         continue
                     if text.startswith("@@") and "목소리 삭제" in text:
@@ -745,7 +833,7 @@ def handle_connection(
                         msg = f"{user} 목소리 정보를 삭제했어요." if deleted else f"{user} 사용자 목소리 정보를 찾지 못했어요."
                         wav_bytes = agent_handler.text_to_audio(msg)
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
                         continue
 
@@ -753,17 +841,17 @@ def handle_connection(
                     if register_msg:
                         wav_bytes = agent_handler.text_to_audio(register_msg)
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
                         continue
 
                 if runtime_controller is not None:
                     runtime_response = runtime_controller.handle_text_command(text)
                     if runtime_response:
-                        log.info("Runtime command applied: %s", text)
+                        log.info("Runtime command applied sid=%s", sid)
                         wav_bytes = agent_handler.text_to_audio(runtime_response)
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
                         continue
 
@@ -786,7 +874,7 @@ def handle_connection(
                     if current_mode == "agent":
                         wav_bytes = agent_handler.text_to_audio(notify_text)
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                     else:
                         send_action(conn, {"action": "WIGGLE", "sid": sid}, send_lock)
 
@@ -796,19 +884,19 @@ def handle_connection(
                         continue
 
                     # Check for mode switch intent first
-                    llm_start = time.time()
+                    llm_start = time.perf_counter()
                     refined_text, robot_action = robot_handler.process_with_llm(text, cur)
-                    perf_logger.log_llm(time.time() - llm_start)
+                    _log_voice_latency("llm", sid, llm_start, perf_logger.log_llm)
 
                     if robot_action.get("action") == "SWITCH_MODE":
                         _handle_mode_switch(robot_action.get("mode"))
                         continue
 
                     # Generate emotion-aware response
-                    llm_start = time.time()
+                    llm_start = time.perf_counter()
                     response_text, emotion, emotion_payload = robot_handler.generate_emotion_response(text)
-                    perf_logger.log_llm(time.time() - llm_start)
-                    log.info("Robot emotion: %s, response: %s", emotion, response_text)
+                    _log_voice_latency("llm", sid, llm_start, perf_logger.log_llm)
+                    log.info("Robot emotion=%s response_chars=%d", emotion, len(response_text))
 
                     emotion_payload["sid"] = sid
                     emotion_payload["recognized"] = bool(text)
@@ -818,7 +906,7 @@ def handle_connection(
                     if response_text and agent_handler:
                         wav_bytes = agent_handler.text_to_audio(response_text)
                         if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes])
+                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
 
                 elif current_mode == "agent":
                     if not text:
@@ -831,16 +919,16 @@ def handle_connection(
                             if gate_result.message:
                                 wav_bytes = agent_handler.text_to_audio(gate_result.message)
                                 if wav_bytes:
-                                    _send_tts_chunks(conn, send_lock, [wav_bytes])
+                                    _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                             input_gate.mark_idle()
                             continue
                         speaker_id = gate_result.user
 
-                    log.info("Agent Mode: Processing text: %s (speaker=%s)", text, speaker_id or "unknown")
+                    log.info("Agent Mode: processing sid=%s characters=%d identified=%s", sid, len(text), bool(speaker_id))
 
-                    llm_start = time.time()
+                    llm_start = time.perf_counter()
                     response, intent = agent_handler.generate_response(text, speaker_id=speaker_id)
-                    perf_logger.log_llm(time.time() - llm_start)
+                    _log_voice_latency("llm", sid, llm_start, perf_logger.log_llm)
 
                     # Intent-based mode switching
                     if intent == "mode_robot":
@@ -850,14 +938,14 @@ def handle_connection(
                         pass  # Already in agent mode
 
                     if response:
-                        log.info("Agent Response: %s", response)
-                        tts_start = time.time()
+                        log.info("Agent Response sid=%s characters=%d", sid, len(response))
+                        tts_start = time.perf_counter()
                         audio_payloads = _build_tts_audio_payloads(
                             agent_handler,
                             response,
                             max_chunks=3,
                         )
-                        perf_logger.log_tts(time.time() - tts_start)
+                        _log_voice_latency("tts", sid, tts_start, perf_logger.log_tts)
 
                         if not audio_payloads:
                             continue
@@ -868,7 +956,7 @@ def handle_connection(
                                 len(audio_payloads),
                             )
 
-                        success = _send_tts_chunks(conn, send_lock, audio_payloads)
+                        success = _send_tts_chunks(conn, send_lock, audio_payloads, connection_ready, turn_started=turn_started, sid=sid)
                         if not success:
                             log.error("Failed to send agent response audio")
                     else:
@@ -899,9 +987,13 @@ def handle_connection(
 
             # Handle protocol packet types
             if ptype == PTYPE_PING:
-                send_pong(conn, send_lock)
+                if send_pong(conn, send_lock):
+                    mark_connection_ready("PING/PONG")
                 if (
                     not connection_greeting_attempted
+                    and connection_ready.is_set()
+                    and current_mode == "agent"
+                    and agent_handler is not None
                     and not input_gate.has_active_stream()
                     and not input_gate.is_busy()
                 ):
@@ -912,11 +1004,13 @@ def handle_connection(
                         agent_handler,
                         runtime_state,
                         input_gate,
+                        connection_ready,
                     )
                 continue
 
             # Handle voice stream start
             if ptype == PTYPE_START:
+                mark_connection_ready("START")
                 connection_greeting_attempted = True
                 accepted = input_gate.start_stream()
                 audio_buf = bytearray()
@@ -969,7 +1063,7 @@ def handle_connection(
                 log.info("END (sid=%s) bytes=%s sec=%.2f", sid, len(data), sec)
 
                 input_gate.mark_busy()
-                queued = job_queue.put(job_queue.stt_queue, (sid, data), drop_oldest=True)
+                queued = job_queue.put(job_queue.stt_queue, (sid, data, time.perf_counter()), drop_oldest=True)
                 if not queued:
                     log.warning("Failed to enqueue sid=%s; input gate released", sid)
                     input_gate.mark_idle()
@@ -1067,10 +1161,15 @@ def main():
         proactive_enabled=assistant_config.get("proactive", True),
         proactive_interval=assistant_config.get("proactive_interval", 1800),
         tts_voice=tts_config.get("voice", "ko-KR-SunHiNeural"),
+        tts_backend=tts_config.get("backend", "edge_tts"),
+        tts_model=tts_config.get("model", "gemini-3.8-flash-lite-tts"),
+        tts_gemini_voice=tts_config.get("gemini_voice", "Kore"),
+        tts_api_key=llm_config.get("gemini_api_key", ""),
         memory_dir=memory_dir,
         memory_refresh_interval=memory_refresh_interval,
         emotion_system=shared_emotion_system,
         integration_config=config.get("integrations", default={}),
+        agent_config=config.get("agent", default={}),
     )
 
     log.info(

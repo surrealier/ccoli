@@ -2,8 +2,11 @@ from src.agent_mode import AgentMode
 
 
 class _FakeEmotion:
-    def analyze_emotion(self, _text):
+    def analyze_emotion(self, _text, speaker_id="default"):
         return "neutral"
+
+    def set_body_state(self, *, sleep_mode=None, fatigue=None):
+        return None
 
 
 class _FakeMemory:
@@ -25,6 +28,10 @@ class _FakeInfoServices:
 
 
 class _FakeProactive:
+    def __init__(self):
+        self.sleep_mode = False
+        self.sleep_until = None
+
     def update_interaction(self):
         return None
 
@@ -77,3 +84,22 @@ def test_generate_response_keeps_generic_fallback_when_no_llm_error_is_present()
 
     assert intent == "none"
     assert response == "잘 이해하지 못했어요. 한 번만 다시 말씀해 주세요."
+
+def test_integration_debug_payload_is_not_logged(caplog):
+    from src.integrations.base import IntegrationErrorCode, IntegrationResult
+
+    class FailingRegistry:
+        def execute(self, provider, intent, params):
+            return IntegrationResult.failure(
+                IntegrationErrorCode.HTTP_5XX,
+                '연결 오류',
+                {'secret': 'PRIVATE_API_KEY', 'request': 'private calendar item'},
+            )
+
+    agent = _make_agent(_FakeLLM())
+    agent.integrations = FailingRegistry()
+    caplog.set_level('WARNING', logger='src.agent_mode')
+    response = agent._integration_or_error('calendar-google', 'calendar.list', {}, '일정')
+    assert response['code'] == 'HTTP_5XX'
+    assert 'PRIVATE_API_KEY' not in caplog.text
+    assert 'private calendar item' not in caplog.text

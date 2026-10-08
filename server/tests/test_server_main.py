@@ -4,6 +4,7 @@ import signal
 import sys
 import unittest.mock as mock
 
+import numpy as np
 import yaml
 
 
@@ -242,6 +243,7 @@ def test_send_connection_greeting_sends_audio_once():
         def __init__(self):
             self.greeting_calls = 0
             self.tts_calls = 0
+            self.events = []
 
         def generate_connection_greeting(self):
             self.greeting_calls += 1
@@ -249,6 +251,7 @@ def test_send_connection_greeting_sends_audio_once():
 
         def text_to_audio(self, text, trim_pad_ms=140.0):
             self.tts_calls += 1
+            self.events.append("tts")
             assert "콜리 연결됐어요!" in text
             assert trim_pad_ms == srv.CONNECTION_GREETING_TTS_PAD_MS
             return b"\x00\x01" * 32
@@ -258,14 +261,22 @@ def test_send_connection_greeting_sends_audio_once():
 
     with (
         mock.patch.object(srv, "current_mode", "agent"),
-        mock.patch.object(srv, "send_action", return_value=True) as send_action,
+        mock.patch.object(
+            srv,
+            "send_action",
+            side_effect=lambda *_args, **_kwargs: agent.events.append("cmd") or True,
+        ) as send_action,
         mock.patch.object(srv, "send_audio", return_value=True) as send_audio,
     ):
         assert srv._send_connection_greeting(mock.sentinel.conn, mock.sentinel.lock, agent, state) is True
         assert srv._send_connection_greeting(mock.sentinel.conn, mock.sentinel.lock, agent, state) is False
 
     send_audio.assert_called_once()
-    send_action.assert_called_once_with(mock.sentinel.conn, {"action": "MIC_LOCK"}, mock.sentinel.lock)
+    assert send_action.call_args_list == [
+        mock.call(mock.sentinel.conn, {"action": "MIC_LOCK"}, mock.sentinel.lock),
+        mock.call(mock.sentinel.conn, {"action": "MIC_UNLOCK"}, mock.sentinel.lock),
+    ]
+    assert agent.events == ["tts", "cmd", "cmd"]
     assert state["connection_greeting_sent"] is True
     assert agent.greeting_calls == 1
     assert agent.tts_calls == 1
@@ -293,6 +304,34 @@ def test_send_connection_greeting_skips_when_input_stream_active():
             _FakeAgent(),
             {"connection_greeting_sent": False},
             gate,
+        ) is False
+
+    send_action.assert_not_called()
+    send_audio.assert_not_called()
+
+
+def test_send_connection_greeting_waits_for_ready_event():
+    class _FakeAgent:
+        def generate_connection_greeting(self):
+            raise AssertionError("should not generate greeting before handshake")
+
+        def text_to_audio(self, _text, trim_pad_ms=140.0):
+            raise AssertionError("should not synthesize greeting before handshake")
+
+    ready = srv.threading.Event()
+
+    with (
+        mock.patch.object(srv, "current_mode", "agent"),
+        mock.patch.object(srv, "CONNECTION_GREETING_READY_TIMEOUT_S", 0.0),
+        mock.patch.object(srv, "send_action") as send_action,
+        mock.patch.object(srv, "send_audio") as send_audio,
+    ):
+        assert srv._send_connection_greeting(
+            mock.sentinel.conn,
+            mock.sentinel.lock,
+            _FakeAgent(),
+            {"connection_greeting_sent": False},
+            ready_event=ready,
         ) is False
 
     send_action.assert_not_called()
@@ -347,8 +386,27 @@ def test_send_tts_chunks_locks_once_and_sends_all_audio():
         )
 
     assert ok is True
-    assert calls == [{"action": "MIC_LOCK"}]
+    assert calls == [{"action": "MIC_LOCK"}, {"action": "MIC_UNLOCK"}]
     assert send_audio.call_count == 2
+
+
+def test_send_tts_chunks_skips_before_ready_event():
+    ready = srv.threading.Event()
+
+    with (
+        mock.patch.object(srv, "send_action") as send_action,
+        mock.patch.object(srv, "send_audio") as send_audio,
+    ):
+        ok = srv._send_tts_chunks(
+            mock.sentinel.conn,
+            mock.sentinel.lock,
+            [b"\x00\x01" * 8],
+            ready,
+        )
+
+    assert ok is False
+    send_action.assert_not_called()
+    send_audio.assert_not_called()
 
 
 def test_send_tts_chunks_unlocks_when_audio_send_fails():
@@ -394,7 +452,7 @@ def test_build_tts_audio_payloads_merges_multiple_chunks():
     payloads = srv._build_tts_audio_payloads(_FakeAgent(), "응답 본문", max_chunks=3)
 
     assert payloads == [b"merged-audio"]
-    assert calls == [("첫 번째 문장", srv.TTS_CHUNK_EDGE_PAD_MS), ("두 번째 문장", srv.TTS_CHUNK_EDGE_PAD_MS)]
+    assert sorted(calls) == sorted([("첫 번째 문장", srv.TTS_CHUNK_EDGE_PAD_MS), ("두 번째 문장", srv.TTS_CHUNK_EDGE_PAD_MS)])
 
 
 def test_build_tts_audio_payloads_retries_single_pass_after_chunk_failure():
@@ -421,7 +479,8 @@ def test_build_tts_audio_payloads_retries_single_pass_after_chunk_failure():
     payloads = srv._build_tts_audio_payloads(_FakeAgent(), "응답 본문", max_chunks=3)
 
     assert payloads == [b"fallback"]
-    assert calls == [("앞부분", srv.TTS_CHUNK_EDGE_PAD_MS), ("뒷부분", srv.TTS_CHUNK_EDGE_PAD_MS), ("앞부분 뒷부분", srv.TTS_FALLBACK_PAD_MS)]
+    assert sorted(calls[:2]) == sorted([("앞부분", srv.TTS_CHUNK_EDGE_PAD_MS), ("뒷부분", srv.TTS_CHUNK_EDGE_PAD_MS)])
+    assert calls[2:] == [("앞부분 뒷부분", srv.TTS_FALLBACK_PAD_MS)]
 
 
 def test_warm_up_runtime_assets_loads_stt_and_tts():
@@ -469,6 +528,7 @@ def test_prime_connection_skips_non_serial_addr():
 def test_start_connection_greeting_spawns_background_thread():
     fake_thread = mock.Mock()
     gate = mock.sentinel.input_gate
+    ready = mock.sentinel.ready_event
 
     with mock.patch.object(srv.threading, "Thread", return_value=fake_thread) as thread_cls:
         result = srv._start_connection_greeting(
@@ -477,6 +537,7 @@ def test_start_connection_greeting_spawns_background_thread():
             mock.sentinel.agent,
             {"connection_greeting_sent": False},
             gate,
+            ready,
         )
 
     assert result is fake_thread
@@ -490,6 +551,7 @@ def test_start_connection_greeting_spawns_background_thread():
         mock.sentinel.agent,
         {"connection_greeting_sent": False},
         gate,
+        ready,
     )
     assert kwargs["daemon"] is True
     assert kwargs["name"] == "connection-greeting"
@@ -511,3 +573,172 @@ def test_build_interrupt_handler_prints_stats_and_raises():
 
     perf.print_stats.assert_called_once()
     fake_logger.info.assert_called()
+
+
+def test_voice_latency_uses_monotonic_clock_and_existing_metrics(caplog):
+    recorder = mock.Mock()
+    with mock.patch.object(srv.time, "perf_counter", return_value=12.345), mock.patch.object(srv.time, "time", return_value=900000.0):
+        with caplog.at_level("INFO", logger="server"):
+            srv._log_voice_latency("stt", 7, 10.0, recorder)
+    recorder.assert_called_once()
+    assert abs(recorder.call_args.args[0] - 2.345) < 0.000001
+    assert "VOICE_LATENCY sid=7 stage=stt duration_ms=2345.0" in caplog.text
+
+
+def test_send_tts_records_time_to_send_only_after_handshake_and_mic_lock(caplog):
+    ready = __import__("threading").Event()
+    ready.set()
+    with mock.patch.object(srv, "send_action", return_value=True), mock.patch.object(srv, "send_audio", return_value=True) as audio, mock.patch.object(srv.time, "perf_counter", return_value=8.0):
+        with caplog.at_level("INFO", logger="server"):
+            assert srv._send_tts_chunks(object(), mock.Mock(), [b"pcm"], ready, turn_started=3.0, sid=4)
+    audio.assert_called_once()
+    assert "stage=end_to_send duration_ms=5000.0" in caplog.text
+    caplog.clear()
+    ready.clear()
+    with caplog.at_level("INFO", logger="server"):
+        assert not srv._send_tts_chunks(object(), mock.Mock(), [b"pcm"], ready, turn_started=3.0, sid=4)
+    assert "VOICE_LATENCY" not in caplog.text
+
+
+def test_tts_chunks_run_concurrently_but_merge_in_original_order():
+    import threading
+    barrier = threading.Barrier(3)
+    last_finished = threading.Event()
+    seen = {}
+
+    class Agent:
+        def prepare_tts_chunks(self, text, max_chunks=3):
+            return ['first', 'middle', 'last']
+
+        def text_to_audio(self, text, trim_pad_ms):
+            seen[text] = trim_pad_ms
+            barrier.wait(timeout=5)
+            if text == 'last':
+                last_finished.set()
+            else:
+                assert last_finished.wait(timeout=5)
+            return text.encode()
+
+        def merge_audio_chunks(self, chunks, **kwargs):
+            assert chunks == [b'first', b'middle', b'last']
+            return b'merged'
+
+    assert srv._build_tts_audio_payloads(Agent(), 'response') == [b'merged']
+    assert seen == {'first': srv.TTS_CHUNK_EDGE_PAD_MS,
+                    'middle': srv.TTS_CHUNK_MIDDLE_PAD_MS,
+                    'last': srv.TTS_CHUNK_EDGE_PAD_MS}
+
+
+def test_parallel_tts_failure_waits_for_chunks_and_closes_worker_loops():
+    import asyncio
+    import threading
+    barrier = threading.Barrier(3)
+    completed = set()
+    loops = []
+    lock = threading.Lock()
+
+    class Agent:
+        def prepare_tts_chunks(self, text, max_chunks=3):
+            return ['one', 'two', 'three']
+
+        def text_to_audio(self, text, trim_pad_ms):
+            if text == 'one two three':
+                assert completed == {'one', 'two', 'three'}
+                assert all(loop.is_closed() for loop in loops)
+                return b'fallback'
+            with lock:
+                loops.append(asyncio.get_event_loop())
+            barrier.wait(timeout=5)
+            with lock:
+                completed.add(text)
+            return b'' if text == 'two' else text.encode()
+
+        def merge_audio_chunks(self, chunks, **kwargs):
+            raise AssertionError('failed chunks must use full-text fallback')
+
+    assert srv._build_tts_audio_payloads(Agent(), 'response') == [b'fallback']
+    assert len({id(loop) for loop in loops}) == 3
+
+
+def test_parallel_tts_exception_falls_back_without_logging_private_text(caplog):
+    class Agent:
+        def prepare_tts_chunks(self, text, max_chunks=3):
+            return ['private first', 'private middle', 'private last']
+
+        def text_to_audio(self, text, trim_pad_ms):
+            if text == 'private middle':
+                raise RuntimeError('private middle')
+            if text == 'private first private middle private last':
+                return b'fallback'
+            return text.encode()
+
+        def merge_audio_chunks(self, chunks, **kwargs):
+            raise AssertionError('failed chunk must trigger a full-text fallback')
+
+    with caplog.at_level('INFO', logger='server'):
+        assert srv._build_tts_audio_payloads(Agent(), 'request') == [b'fallback']
+    assert 'private' not in caplog.text
+
+def test_tts_partial_chunks_are_not_played_when_full_fallback_fails(caplog):
+    class Agent:
+        def prepare_tts_chunks(self, text, max_chunks=3):
+            return ["첫 문장", "둘째 문장"]
+
+        def text_to_audio(self, text, trim_pad_ms):
+            return b"first-pcm" if text == "첫 문장" else b""
+
+        def merge_audio_chunks(self, chunks, **kwargs):
+            raise AssertionError("partial audio must not be merged")
+
+    with caplog.at_level("WARNING", logger="server"):
+        payloads = srv._build_tts_audio_payloads(Agent(), "전체 응답")
+    assert payloads == []
+    assert "incomplete TTS" in caplog.text
+
+def test_voice_rejection_diagnostics_are_bounded_and_private(caplog):
+    assert srv._voice_rejection_reason(0.44) == "too_short"
+    assert srv._voice_rejection_reason(0.68, -46.0) == "too_quiet"
+    assert srv._voice_rejection_reason(0.68, -44.0) is None
+    with caplog.at_level("INFO", logger="server"):
+        srv._log_voice_rejection(2, "too_quiet", 0.68, rms_db=-46.0)
+    assert "VOICE_INPUT sid=2 status=filtered reason=too_quiet" in caplog.text
+    assert "duration_ms=680.0 rms_db=-46.0" in caplog.text
+    assert "payload" not in caplog.text
+
+
+def test_long_quiet_capture_with_sustained_local_voice_is_not_rejected():
+    pcm = np.zeros(srv.SR * 8, dtype=np.float32)
+    pcm[2 * srv.SR : 2 * srv.SR + srv.SR // 2] = 0.01
+    rms_db = 20 * np.log10(np.sqrt(np.mean(pcm * pcm)))
+    assert rms_db < -45.0
+    assert srv._voice_rejection_reason(8.0, rms_db, pcm) is None
+
+
+def test_continuous_quiet_capture_stays_filtered():
+    pcm = np.full(srv.SR * 8, 0.002, dtype=np.float32)
+    assert srv._voice_rejection_reason(8.0, -54.0, pcm) == "too_quiet"
+
+
+def test_one_loud_window_is_not_treated_as_sustained_voice():
+    pcm = np.zeros(srv.SR * 8, dtype=np.float32)
+    pcm[2 * srv.SR : 2 * srv.SR + srv.SR // 10] = 0.02
+    rms_db = 20 * np.log10(np.sqrt(np.mean(pcm * pcm)))
+    assert rms_db < -45.0
+    assert srv._voice_rejection_reason(8.0, rms_db, pcm) == "too_quiet"
+
+
+def test_sustained_voice_crossing_window_boundary_is_not_rejected():
+    pcm = np.zeros(srv.SR * 8, dtype=np.float32)
+    pcm[int(0.005 * srv.SR) : int(0.215 * srv.SR)] = 0.006
+    rms_db = 20 * np.log10(np.sqrt(np.mean(pcm * pcm)))
+    assert rms_db < -45.0
+    assert srv._voice_rejection_reason(8.0, rms_db, pcm) is None
+
+def test_quiet_speech_with_brief_low_energy_closures_is_not_rejected():
+    pcm = np.zeros(srv.SR * 8, dtype=np.float32)
+    for offset in range(0, 25, 5):
+        start = (srv.SR // 50) * offset
+        pcm[start : start + (srv.SR // 50) * 4] = 0.01
+    rms_db = 20 * np.log10(np.sqrt(np.mean(pcm * pcm)))
+    assert rms_db < -45.0
+    assert srv._voice_rejection_reason(8.0, rms_db, pcm) is None

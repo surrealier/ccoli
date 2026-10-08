@@ -29,6 +29,10 @@ _ZERO_PAYLOAD_PACKET_TYPES = {
 }
 _MAX_INCOMING_AUDIO_PAYLOAD = 16_384
 _MAX_INCOMING_BUFFER_STATUS_PAYLOAD = 1_024
+# Largest payload the ESP32 will accept in one frame.
+# Mirrors RX_MAX_PACKET_PAYLOAD in arduino/atom_echo_m5stack_esp32_ino/config.h;
+# the device drops longer frames as serial noise, so never emit one.
+DEVICE_MAX_PACKET_PAYLOAD = 2_048
 WIRED_TTS_SAMPLE_RATE = 8_000
 WIRED_TTS_BYTES_PER_SAMPLE = 1
 WIRED_TTS_AUDIO_CHUNK = 512
@@ -74,31 +78,29 @@ def _encode_serial_audio_payload(pcm_bytes: bytes) -> bytes:
     Transcode PCM16LE/16kHz mono to G.711 mu-law/8kHz mono for wired USB links.
 
     This halves the sample rate and compresses each sample to 8-bit so 115200
-    baud can carry wired audio without starving microphone capture. A two-tap
-    averaging filter reduces aliasing before the 2:1 decimation, and a single-
-    pole IIR smooths the result to cut wired-only high-frequency hiss.
+    baud can carry wired audio without starving microphone capture.
+
+    Averaging each input pair is the anti-aliasing step: a 2-tap FIR at 16kHz
+    has its null exactly at 8kHz, the output Nyquist frequency. Nothing is
+    filtered after decimation — a low-pass at the 8kHz rate would attenuate the
+    2-4kHz band that carries Korean consonants, and the firmware's uplink
+    encoder does the same plain averaging, so both directions stay symmetric.
     """
     usable = len(pcm_bytes) - (len(pcm_bytes) % 2)
     if usable <= 0:
         return b""
 
-    # Read all samples first for proper filtering
     n_samples = usable // 2
     samples = []
     for i in range(0, usable, 2):
         samples.append(int.from_bytes(pcm_bytes[i : i + 2], "little", signed=True))
 
-    # 2:1 decimation with averaging + IIR smoothing (alpha=0.35)
     out_len = n_samples // 2
     encoded = bytearray(out_len)
-    prev = 0
     for i in range(out_len):
         idx = i * 2
         avg = (samples[idx] + samples[idx + 1]) // 2
-        # Single-pole low-pass: y[n] = alpha*x[n] + (1-alpha)*y[n-1]
-        filtered = (avg * 9 + prev * 7) >> 4  # alpha ≈ 0.56
-        encoded[i] = _linear16_to_mulaw(filtered)
-        prev = filtered
+        encoded[i] = _linear16_to_mulaw(avg)
     return bytes(encoded)
 
 
@@ -258,6 +260,9 @@ def send_packet(
         if payload is None:
             payload = b""
 
+        # Never frame more than the device's receive buffer can hold.
+        audio_chunk = max(1, min(int(audio_chunk), DEVICE_MAX_PACKET_PAYLOAD))
+
         def _send():
             offset = 0
             total = len(payload)
@@ -295,13 +300,18 @@ def send_packet(
                         if sleep_s > 0:
                             time.sleep(sleep_s)
             else:
-                # 일반 데이터의 경우 청크 단위로 전송
-                while offset < total:
-                    chunk_size = min(total - offset, 60000)
-                    chunk = payload[offset : offset + chunk_size]
-                    header = struct.pack("<BH", ptype & 0xFF, len(chunk))
-                    conn.sendall(header + chunk)
-                    offset += chunk_size
+                # 비오디오 페이로드(CMD 등)는 나눌 수 없다.
+                # 조각마다 헤더가 붙어 디바이스에는 서로 다른 패킷으로 보이고,
+                # 쪼개진 JSON은 어느 쪽도 파싱되지 않는다.
+                if total > DEVICE_MAX_PACKET_PAYLOAD:
+                    log.error(
+                        "Refusing to send oversized ptype=0x%02X payload: %d > %d bytes",
+                        ptype,
+                        total,
+                        DEVICE_MAX_PACKET_PAYLOAD,
+                    )
+                    return False
+                conn.sendall(struct.pack("<BH", ptype & 0xFF, total) + payload)
             return True
 
         # 락이 제공된 경우 스레드 안전 전송
@@ -326,7 +336,7 @@ def send_action(conn: socket.socket, action_dict: dict, lock=None) -> bool:
     payload = json.dumps(action_dict, ensure_ascii=False).encode("utf-8")
     ok = send_packet(conn, PTYPE_CMD, payload, lock=lock)
     if ok:
-        log.info("CMD to ESP32: %s", action_dict)
+        log.info("CMD to ESP32 action=%s sid=%s", action_dict.get("action"), action_dict.get("sid"))
     return ok
 
 

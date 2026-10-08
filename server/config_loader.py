@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 import yaml
 
+from src.robot_mode import normalize_display_type
 from src.runtime_preferences import (
     DEFAULT_API_MODELS,
     DEFAULT_CONNECTION_PRIORITY,
@@ -24,6 +25,45 @@ from src.runtime_preferences import (
 )
 
 log = logging.getLogger("config_loader")
+
+_SECRET_ENV_PATHS: dict[str, tuple[str, ...]] = {
+    "WEATHER_API_KEY": ("weather", "api_key"),
+    "OPENAI_API_KEY": ("llm", "openai_api_key"),
+    "ANTHROPIC_API_KEY": ("llm", "anthropic_api_key"),
+    "GEMINI_API_KEY": ("llm", "gemini_api_key"),
+    "TAVILY_API_KEY": ("integrations", "search", "api_key"),
+    "SLACK_BOT_TOKEN": ("integrations", "notify-slack", "api_key"),
+    "GOOGLE_MAPS_API_KEY": ("integrations", "maps", "api_key"),
+    "GOOGLE_CLIENT_ID": ("integrations", "calendar-google", "fields", "client_id"),
+    "GOOGLE_CLIENT_SECRET": ("integrations", "calendar-google", "fields", "client_secret"),
+    "GOOGLE_REFRESH_TOKEN": ("integrations", "calendar-google", "fields", "refresh_token"),
+    "TELEGRAM_BOT_TOKEN": ("telegram", "bot_token"),
+    "WEB_AUTH_TOKEN": ("web", "auth_token"),
+}
+
+
+def _nested_value(data: dict, path: tuple[str, ...]) -> tuple[bool, Any]:
+    node: Any = data
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return False, None
+        node = node[key]
+    return True, node
+
+
+def _restore_nested_value(data: dict, original: dict, path: tuple[str, ...]) -> None:
+    present, value = _nested_value(original, path)
+    node = data
+    for key in path[:-1]:
+        if not isinstance(node.get(key), dict):
+            if not present:
+                return
+            node[key] = {}
+        node = node[key]
+    if present:
+        node[path[-1]] = copy.deepcopy(value)
+    else:
+        node.pop(path[-1], None)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -73,7 +113,7 @@ class Config:
             "port": 5001,
         },
         "stt": {
-            "model_size": "medium",
+            "model_size": "turbo",
             "device": "cuda",
             "language": "ko",
         },
@@ -97,6 +137,8 @@ class Config:
         "tts": {
             "backend": "edge_tts",
             "voice": "ko-KR-SunHiNeural",
+            "model": "gemini-3.8-flash-lite-tts",
+            "gemini_voice": "Kore",
         },
         "assistant": {
             "name": "ccoli",
@@ -104,6 +146,7 @@ class Config:
             "proactive": True,
             "proactive_interval": 1800,
         },
+        "agent": {"enabled": False, "state_path": ""},
         "features": {
             "robot_mode_enabled": False,
         },
@@ -219,6 +262,8 @@ class Config:
     def __init__(self, config_file: str = "config.yaml"):
         self.config_file = config_file
         self.config = copy.deepcopy(self.DEFAULT_CONFIG)
+        self._yaml_config: dict = {}
+        self._env_secret_paths: set[tuple[str, ...]] = set()
 
         self._load_yaml()
         self._load_env()
@@ -233,6 +278,9 @@ class Config:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     yaml_config = yaml.safe_load(f)
                     if yaml_config:
+                        if not isinstance(yaml_config, dict):
+                            raise ValueError("config.yaml must contain a mapping")
+                        self._yaml_config = copy.deepcopy(yaml_config)
                         self._merge_config(self.config, yaml_config)
                         log.info("Loaded config from %s", self.config_file)
             else:
@@ -250,6 +298,10 @@ class Config:
                 log.info("Loaded .env file")
             except ImportError:
                 pass
+
+            self._env_secret_paths = {
+                path for env_key, path in _SECRET_ENV_PATHS.items() if env_key in os.environ
+            }
 
             if "WEATHER_API_KEY" in os.environ:
                 self.config["weather"]["api_key"] = os.environ["WEATHER_API_KEY"]
@@ -344,8 +396,25 @@ class Config:
             if "TTS_VOICE" in os.environ:
                 self.config.setdefault("tts", {})["voice"] = os.environ["TTS_VOICE"]
 
+            if "TTS_MODEL" in os.environ:
+                self.config.setdefault("tts", {})["model"] = os.environ["TTS_MODEL"]
+
+            if "TTS_GEMINI_VOICE" in os.environ:
+                self.config.setdefault("tts", {})["gemini_voice"] = os.environ["TTS_GEMINI_VOICE"]
             if "TTS_BACKEND" in os.environ:
                 self.config.setdefault("tts", {})["backend"] = os.environ["TTS_BACKEND"]
+
+            if "WEB_HOST" in os.environ:
+                self.config.setdefault("web", {})["host"] = os.environ["WEB_HOST"]
+            if "WEB_PORT" in os.environ:
+                self.config.setdefault("web", {})["port"] = int(os.environ["WEB_PORT"])
+            if "WEB_AUTH_TOKEN" in os.environ:
+                self.config.setdefault("web", {})["auth_token"] = os.environ["WEB_AUTH_TOKEN"]
+
+            if "AGENT_ENABLED" in os.environ:
+                self.config.setdefault("agent", {})["enabled"] = _coerce_bool(os.environ["AGENT_ENABLED"])
+            if "AGENT_STATE_PATH" in os.environ:
+                self.config.setdefault("agent", {})["state_path"] = os.environ["AGENT_STATE_PATH"]
 
             if "MEMORY_DIR" in os.environ:
                 self.config.setdefault("memory", {})["memory_dir"] = os.environ["MEMORY_DIR"]
@@ -407,9 +476,11 @@ class Config:
         if controller not in {"legacy_direct", "companion_uart"}:
             controller = "legacy_direct"
         robot_cfg["controller"] = controller
-        robot_cfg["transport"] = str(
-            robot_cfg.get("transport", "companion" if controller == "companion_uart" else "local") or ""
-        ).strip().lower() or ("companion" if controller == "companion_uart" else "local")
+        # transport is derived from controller, never read back from the merged
+        # config: the defaults always seed "local", so honoring an existing value
+        # would pin a companion_uart build to the legacy local transport.
+        # Keep this in sync with src/robot_mode._normalize_robot_config.
+        robot_cfg["transport"] = "companion" if controller == "companion_uart" else "local"
 
         companion_cfg = robot_cfg.setdefault("companion", {})
         companion_cfg["transport"] = "uart"
@@ -431,10 +502,7 @@ class Config:
         servo_cfg["count"] = min(4, max(1, servo_count))
 
         display_cfg = robot_cfg.setdefault("display", {})
-        display_type = str(display_cfg.get("type") or "").strip().lower()
-        if not display_type:
-            display_type = "st7789v2_240x280" if controller == "companion_uart" else "ssd1306"
-        display_cfg["type"] = display_type
+        display_cfg["type"] = normalize_display_type(display_cfg.get("type"), controller)
 
         robot_emotion_cfg = robot_cfg.setdefault("emotion", {})
         try:
@@ -527,8 +595,13 @@ class Config:
     def save(self, config_file: str = None):
         file_path = config_file or self.config_file
         try:
+            saved = copy.deepcopy(self.config)
+            for path in self._env_secret_paths:
+                _restore_nested_value(saved, self._yaml_config, path)
             with open(file_path, "w", encoding="utf-8") as f:
-                yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                yaml.dump(saved, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            if file_path == self.config_file:
+                self._yaml_config = saved
             log.info("Configuration saved to %s", file_path)
         except Exception as exc:
             log.error("Failed to save config to %s: %s", file_path, exc)
