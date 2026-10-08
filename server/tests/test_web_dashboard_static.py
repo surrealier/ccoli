@@ -37,6 +37,10 @@ def test_dashboard_shell_defaults_to_english_and_uses_split_assets():
     assert 'id="runtime-summary-cards"' in html
     assert 'id="config-json"' in html
     assert 'id="hero-headline"' in html
+    assert "fonts.googleapis.com" in html
+    assert "Fraunces" in html
+    assert 'class="skip-link"' in html
+    assert 'id="main"' in html
 
     for locale in ("en", "ko", "ja", "zh"):
         assert f'value="{locale}"' in html, f"locale option {locale} is not selectable"
@@ -77,6 +81,9 @@ def test_dashboard_css_preserves_text_safe_layout_rules():
 
     assert "overflow-wrap:anywhere" in re.sub(r"\s+", "", css)
     assert ".hero-figure" in css
+    for token in ("--carrot", "Fraunces", "Space Mono", ":focus-visible", "prefers-reduced-motion", ".dot.live"):
+        assert token in css
+    assert '[data-theme="dark"]' in css
 
 
 def test_dashboard_js_defaults_to_english_and_calls_diagnostics():
@@ -84,3 +91,4 @@ def test_dashboard_js_defaults_to_english_and_calls_diagnostics():
 
     assert 'localStorage.getItem("ccoli.locale") || "en"' in js
     assert '"/api/diagnostics/"' in js
+    assert 'setAttribute("data-theme", "dark")' in js

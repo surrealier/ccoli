@@ -185,6 +185,8 @@ const COPY = {
       actionFailed: "Action failed",
       checkCompleted: "Check completed.",
       noData: "No data yet.",
+      skipToContent: "Skip to content",
+      editorAria: "Memory file editor",
     },
   },
   ko: {
@@ -361,6 +363,8 @@ const COPY = {
       actionFailed: "작업 실패",
       checkCompleted: "점검을 완료했습니다.",
       noData: "아직 데이터가 없습니다.",
+      skipToContent: "본문으로 건너뛰기",
+      editorAria: "메모리 파일 편집기",
     },
   },
   ja: {
@@ -537,6 +541,8 @@ const COPY = {
       actionFailed: "操作失敗",
       checkCompleted: "チェックが完了しました。",
       noData: "まだデータがありません。",
+      skipToContent: "本文へスキップ",
+      editorAria: "メモリーファイルエディター",
     },
   },
   zh: {
@@ -713,6 +719,8 @@ const COPY = {
       actionFailed: "操作失败",
       checkCompleted: "检查已完成。",
       noData: "暂时没有数据。",
+      skipToContent: "跳到主要内容",
+      editorAria: "记忆文件编辑器",
     },
   },
 };
@@ -739,6 +747,7 @@ const STATE = {
   wsAuthBlocked: false,
   logsPaused: false,
   lastChatSignature: "",
+  speakTimer: null,
 };
 
 document.addEventListener("DOMContentLoaded", boot);
@@ -890,6 +899,10 @@ function applyCopy() {
     const value = t(node.dataset.i18nPlaceholder, "");
     if (value) node.setAttribute("placeholder", value);
   });
+  $$("[data-i18n-aria]").forEach((node) => {
+    const value = t(node.dataset.i18nAria, "");
+    if (value) node.setAttribute("aria-label", value);
+  });
 
   $("#logs-pause").textContent = STATE.logsPaused ? t("common.resume") : t("common.pause");
   if ($("#locale-select").value !== STATE.locale) $("#locale-select").value = STATE.locale;
@@ -923,8 +936,9 @@ function openTab(tab) {
 
 function applyTheme(theme) {
   STATE.theme = theme;
-  if (theme === "light") {
-    document.documentElement.setAttribute("data-theme", "light");
+  // Dark tokens live under [data-theme="dark"]; light is the bare :root default.
+  if (theme === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
   } else {
     document.documentElement.removeAttribute("data-theme");
   }
@@ -1571,6 +1585,9 @@ function renderStatus() {
   const emotion = status.emotion || "neutral";
   const conversationCount = Number(status.conversation_count || 0);
 
+  // Subtle emotion-tinted glow behind the mascot (consumed by CSS [data-emotion]).
+  document.documentElement.setAttribute("data-emotion", emotion);
+
   $("#mode-chip").textContent = `${uiLabel("mode")} · ${modeLabel(mode)}`;
   $("#emotion-chip").textContent = `${uiLabel("emotion")} · ${emotionLabel(emotion)}`;
   $("#conversation-chip").textContent = `${formatNumber(conversationCount)} ${uiLabel("turns")}`;
@@ -1818,13 +1835,25 @@ function handleWs(payload) {
     if (signature === STATE.lastChatSignature) return;
     STATE.lastChatSignature = signature;
     if (payload.text) appendChat("user", payload.text, { speaker: payload.speaker_id || "web_user" });
-    if (payload.response) appendChat("assistant", payload.response, { emotion: payload.emotion, intent: payload.intent });
+    if (payload.response) {
+      appendChat("assistant", payload.response, { emotion: payload.emotion, intent: payload.intent });
+      flashSpeaking();
+    }
   }
 }
 
 function wsState(live, label) {
   $("#ws-dot").classList.toggle("live", live);
   $("#ws-label").textContent = label;
+  // Drive the lightly-alive mascot: thriving when connected, dormant otherwise.
+  document.body.classList.toggle("is-live", live);
+}
+
+// Brief carrot "the robot just spoke" flash on the live node + hero glow.
+function flashSpeaking() {
+  document.body.classList.add("ccoli-speaking");
+  window.clearTimeout(STATE.speakTimer);
+  STATE.speakTimer = window.setTimeout(() => document.body.classList.remove("ccoli-speaking"), 1600);
 }
 
 function retryWs() {

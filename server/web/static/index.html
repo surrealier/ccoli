@@ -5,10 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ccoli dashboard</title>
 <link rel="icon" type="image/svg+xml" href="/brand-assets/ccoli.svg?v=20261008-icon2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..600&family=Inter+Tight:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="/dashboard.css">
 <script defer src="/dashboard.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main" data-i18n="common.skipToContent">Skip to content</a>
   <div class="top-metrics-bar" id="top-metrics-bar">
     <div class="metrics-bar-left">
       <img src="/brand-assets/ccoli.svg?v=20261008-icon2" alt="ccoli" class="bar-logo">
@@ -97,7 +101,7 @@
       </section>
     </aside>
 
-    <main class="workspace">
+    <main class="workspace" id="main" tabindex="-1">
       <header class="topbar surface">
         <div class="topbar-copy">
           <h2 class="title-clamp" id="topbar-tab-title" data-i18n="top.title"></h2>
@@ -330,7 +334,7 @@
                   <p class="body-copy" id="memory-meta"></p>
                 </div>
               </div>
-              <textarea id="memory-editor" spellcheck="false"></textarea>
+              <textarea id="memory-editor" spellcheck="false" aria-label="Memory file editor" data-i18n-aria="common.editorAria"></textarea>
             </div>
           </div>
         </article>
