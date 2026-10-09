@@ -19,6 +19,7 @@
 #include "servo_control.h"
 #include "display_control.h"
 #include <M5Unified.h>
+#include <CcoliRobotControl.h>
 #include <ctype.h>
 #include <string.h>
 
@@ -62,6 +63,33 @@ static bool capture_lock_waiting_for_playback = false;
 // PING 타이밍
 static uint32_t last_ping_ms = 0;
 static uint32_t last_peer_rx_ms = 0;
+static Stream* robot_status_transport = nullptr;
+static constexpr size_t ROBOT_STATUS_QUEUE_SIZE = 4;
+static char robot_status_queue[ROBOT_STATUS_QUEUE_SIZE][RX_MAX_PAYLOAD+1];
+static size_t robot_status_head=0,robot_status_count=0;
+bool protocol_send_robot_status(const char* json) {
+  if (!json) return false;
+  const size_t len = strlen(json);
+  if (len == 0 || len > RX_MAX_PAYLOAD) return false;
+  // Newest state, particularly STOPPED, wins under malicious/flooded input.
+  if(robot_status_count==ROBOT_STATUS_QUEUE_SIZE){
+    robot_status_head=(robot_status_head+1)%ROBOT_STATUS_QUEUE_SIZE;
+    --robot_status_count;
+  }
+  const size_t target=(robot_status_head+robot_status_count)%ROBOT_STATUS_QUEUE_SIZE;
+  memcpy(robot_status_queue[target],json,len+1);++robot_status_count;
+  return true;
+}
+void protocol_flush_robot_status() {
+  if(!robot_status_transport||!robot_status_count)return;
+  // Pop before sending: safety pumping may enqueue a new status while a slow
+  // socket is being serviced. A stack copy keeps the in-flight frame immutable.
+  char frame[RX_MAX_PAYLOAD+1];
+  memcpy(frame,robot_status_queue[robot_status_head],sizeof(frame));
+  robot_status_head=(robot_status_head+1)%ROBOT_STATUS_QUEUE_SIZE;--robot_status_count;
+  protocol_send_packet(*robot_status_transport,PTYPE_ROBOT_STATUS,
+      reinterpret_cast<const uint8_t*>(frame),static_cast<uint16_t>(strlen(frame)));
+}
 
 #define DEBUG_PRINTLN(msg) do { if (connection_debug_logging_enabled()) Serial.println(msg); } while (0)
 
@@ -87,7 +115,7 @@ static bool stream_write_all(Stream& transport, const uint8_t* data, size_t len)
   const uint8_t* p = data;
   size_t remaining = len;
   while (remaining > 0) {
-    size_t written = transport.write(p, remaining);
+    size_t written = connection_write(transport, p, remaining);
     if (written == 0) return false;
     p += written;
     remaining -= written;
@@ -340,6 +368,11 @@ static void handleCmdJson(const uint8_t* payload, uint16_t len) {
   memcpy(json, payload, n);
   json[n] = 0;
 
+  if (strstr(json, "ROBOT_CONTROL") != nullptr) {
+    if (robot_bridge_enabled()) robot_bridge_forward_json(json);
+    else servo_handle_control_json(json, n);
+    return;
+  }
   // JSON 필드 추출
   char action[32] = {0};
   int sid = -1, angle = -1;
@@ -357,17 +390,19 @@ static void handleCmdJson(const uint8_t* payload, uint16_t len) {
   if (has_action && strcmp(action, "MIC_LOCK") == 0) {
     capture_locked = true;
     capture_lock_waiting_for_playback = true;
+    robot_bridge_set_speech_active(true);
     return;
   }
   if (has_action && strcmp(action, "MIC_UNLOCK") == 0) {
     capture_locked = false;
     capture_lock_waiting_for_playback = false;
+    robot_bridge_set_speech_active(false);
     return;
   }
 
   // ── ROBOT_STATE: companion-forward first, local fallback second ──
   if (has_action && strcmp(action, "ROBOT_STATE") == 0) {
-    if (robot_bridge_ready()) {
+    if (robot_bridge_enabled()) {
       robot_bridge_forward_json(json);
     }
 
@@ -421,6 +456,7 @@ static void handleCmdJson(const uint8_t* payload, uint16_t len) {
     return;
   }
 
+  if (has_action && strcmp(action, "STOP") == 0) { servo_stop(); return; }
   // ── 무의미한 발화: WIGGLE만 허용 ──
   if (!meaningful) {
     if (strcmp(action, "WIGGLE") == 0) servo_wiggle();
@@ -433,7 +469,9 @@ static void handleCmdJson(const uint8_t* payload, uint16_t len) {
   } else if (strcmp(action, "STOP") == 0) {
     servo_stop();
   } else if (strcmp(action, "SERVO_SET") == 0 && has_angle) {
-    servo_set_angle(angle);  // clamp_angle()이 내부에서 0-180 범위 보장
+    int servo = 0;
+    json_get_int(json, "servo", &servo);
+    servo_set_angle(servo, angle);  // Legacy actuator packets cannot bypass v1 authorization.
   }
 }
 
@@ -506,7 +544,9 @@ bool protocol_send_packet(Stream& transport, uint8_t type, const uint8_t* payloa
 // 상태머신: RX_TYPE → RX_LEN0 → RX_LEN1 → RX_PAYLOAD → 핸들러 → RX_TYPE
 // 헤더 3바이트만 1바이트씩 읽고, 페이로드는 readBytes()로 한 번에 받는다.
 void protocol_poll(Stream& transport) {
-  while (transport.available() > 0) {
+  robot_status_transport = &transport;
+  const uint32_t poll_started = millis();
+  while (transport.available() > 0 && static_cast<uint32_t>(millis() - poll_started) < 5) {
     // ── 벌크 읽기: 모든 페이로드 (AUDIO_OUT / CMD 공통) ──
     // 바이트 단위 read()는 TTS 한 청크마다 수천 번 호출돼 재생이 끊기므로,
     // 페이로드 단계는 항상 readBytes()로 한 번에 받는다.
@@ -515,6 +555,7 @@ void protocol_poll(Stream& transport) {
       size_t avail = (size_t)transport.available();
       if (avail == 0) break;
       if (want > avail) want = avail;
+      if (want > 512) want = 512;
 
       size_t got;
       if (rx_overflow) {
@@ -668,6 +709,7 @@ bool protocol_has_audio_buffered() {
 // protocol_clear_audio_buffer — TTS 즉시 중단 (버튼 인터럽트용)
 // 링 버퍼를 비우고 스피커 하드웨어도 정지
 void protocol_clear_audio_buffer() {
+  robot_bridge_set_speech_active(false);
   audio_ring_head = 0;
   audio_ring_tail = 0;
   audio_playing = false;

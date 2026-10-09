@@ -52,7 +52,7 @@ extern const uint16_t SERVER_PORT;
 #define DISPLAY_I2C_ADDR 0x3C
 
 // ST7789V2 Color LCD (SPI) — only when DISPLAY_TYPE == 2
-// Waveshare 1.69" 240x280: DIN=G25 CLK=G21 CS=G26 DC=G32 RST=3V3 BL=5V
+// Waveshare 1.69" 240x280: DIN=G25 CLK=G21 CS=G26 DC=G32 RST=3V3 BL=3V3
 #define LCD_PIN_DIN  25
 #define LCD_PIN_CLK  21
 #define LCD_PIN_CS   26
@@ -60,8 +60,8 @@ extern const uint16_t SERVER_PORT;
 #define LCD_WIDTH    240
 #define LCD_HEIGHT   280
 
-// Companion robot bridge (Phase 1 scaffold)
-// Disabled by default so the legacy direct-servo path keeps working.
+// Leased robot-control v1 companion bridge
+// Disabled by default; both direct and companion outputs require explicit arm.
 // When enabled, the Grove pins are reassigned as UART TX/RX for a companion
 // controller and local servo outputs are disabled.
 #ifndef ROBOT_BRIDGE_ENABLED

@@ -28,9 +28,9 @@ for variant in "${VARIANTS[@]}"; do
   echo "  extra flags: ${flags:-<none>}"
   echo "=============================================================="
 
-  args=(compile --fqbn "$FQBN" --warnings default)
+  args=(compile --fqbn "$FQBN" --warnings default --libraries /workspace/libraries)
   if [ -n "$flags" ]; then
-    args+=(--build-property "build.extra_flags=$flags")
+    args+=(--build-property "build.extra_flags=-DESP32 $flags")
   fi
   args+=("$SKETCH")
 
@@ -41,6 +41,24 @@ for variant in "${VARIANTS[@]}"; do
     failed=1
   fi
   echo
+done
+
+# Exercise the exact shared controller and strict parser natively with memory /
+# undefined-behavior sanitizers before compiling the ESP32 adapters.
+g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I/workspace/libraries/CcoliRobotControl/src \
+  /workspace/firmware-controller-smoke.cpp -o /tmp/firmware-controller-smoke
+/tmp/firmware-controller-smoke
+
+COMPANION_FQBN="${COMPANION_FQBN:-m5stack:esp32:m5stack_core}"
+for display in 0 1; do
+  echo "Building companion controller (display=${display}, ${COMPANION_FQBN})"
+  if ! arduino-cli compile --fqbn "$COMPANION_FQBN" --warnings default \
+      --libraries /workspace/libraries \
+      --build-property "build.extra_flags=-DESP32 -DCOMPANION_DISPLAY_ENABLED=${display}" \
+      /workspace/robot_companion_controller; then
+    failed=1
+  fi
 done
 
 if [ "$failed" -ne 0 ]; then

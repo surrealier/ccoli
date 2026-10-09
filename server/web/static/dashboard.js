@@ -1,6 +1,7 @@
 const LOCALES = {
   en: { intl: "en-US", html: "en" },
   ko: { intl: "ko-KR", html: "ko" },
+  es: { intl: "es-ES", html: "es" },
   ja: { intl: "ja-JP", html: "ja" },
   zh: { intl: "zh-CN", html: "zh-CN" },
 };
@@ -725,6 +726,19 @@ const COPY = {
   },
 };
 
+COPY.es = JSON.parse(JSON.stringify(COPY.en));
+COPY.es.brand = {kicker:"ccoli",title:"Tu agente de voz.",body:"El idioma de la interfaz y el de la conversación se pueden elegir por separado."};
+COPY.es.locale.options = {en:"Inglés",ko:"Coreano",ja:"Japonés",zh:"Chino",es:"Español"};
+COPY.es.nav = {
+ overview:{label:"Inicio",body:"Resumen en vivo"}, diagnostics:{label:"Diagnóstico",body:"Estado y ajustes"},
+ memory:{label:"Memoria",body:"Archivos editables"},conversation:{label:"Conversaciones",body:"Historial"},
+ schedules:{label:"Recordatorios",body:"Alarmas y tareas"},chat:{label:"Chat",body:"Conversación en el navegador"},logs:{label:"Registros",body:"Eventos en vivo"}
+};
+COPY.es.top = {kicker:"panel de control",title:"Agente de voz ccoli",body:"Conversación, dispositivos y estado.",localeLabel:"Idioma",reconnect:"Reconectar",refresh:"Actualizar"};
+COPY.es.chat = {kicker:"chat",title:"Habla con ccoli.",body:"Escribe en tu idioma.",composeTitle:"Enviar un mensaje",composeBody:"Conversación desde el navegador.",speaker:"Usuario",message:"Mensaje",messagePlaceholder:"Escribe un mensaje.",send:"Enviar",clear:"Borrar"};
+Object.assign(COPY.es.common,{loading:"Cargando",unknown:"Desconocido",save:"Guardar",cancel:"Cancelar",delete:"Eliminar",pause:"Pausar",resume:"Reanudar",actionFailed:"La operación falló",loadFailed:"No se pudo cargar",refreshed:"Actualizado",refreshPartial:"Algunos datos no se pudieron actualizar",messageRequired:"Escribe un mensaje",chatReceived:"Respuesta recibida",skipToContent:"Ir al contenido",editorAria:"Editor de memoria"});
+for (const locale of ["en","ko","zh","ja"]) COPY[locale].locale.options.es="Español";
+
 const STATE = {
   locale: normalizeLocale(localStorage.getItem("ccoli.locale") || "en"),
   tab: normalizeTab(localStorage.getItem("ccoli.activeTab") || "overview"),
@@ -998,7 +1012,7 @@ async function api(path, options = {}) {
   if (generation !== STATE.authGeneration) throw new StaleAuthResponse();
   if (!response.ok) {
     const detail = typeof payload === "string" ? payload : payload.detail || JSON.stringify(payload);
-    throw new Error(detail || `HTTP ${response.status}`);
+    throw new Error((typeof detail === "object" ? detail.message || detail.code : detail) || `HTTP ${response.status}`);
   }
   return payload;
 }
@@ -1480,7 +1494,7 @@ async function sendChat(event) {
   try {
     const payload = await api("/api/chat/", {
       method: "POST",
-      body: JSON.stringify({ text, speaker_id: speaker }),
+      body: JSON.stringify({ text, speaker_id: speaker, language: $("#conversation-language")?.value || "auto" }),
     });
     STATE.lastChatSignature = `${speaker}::${text}::${payload.response || ""}`;
     appendChat("assistant", payload.response || "", { emotion: payload.emotion, intent: payload.intent });
@@ -1700,6 +1714,7 @@ function clearToken() {
 }
 
 function clearPrivateView() {
+  if (typeof clearSetupState === "function") clearSetupState();
   STATE.authGeneration += 1;
   STATE.status = null;
   STATE.diagnostics = null;

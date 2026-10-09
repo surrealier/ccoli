@@ -17,6 +17,55 @@
 #include "protocol.h"
 #include <M5Unified.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <errno.h>
+#include <algorithm>
+
+static void (*s_safety_callback)(bool)=nullptr;
+void connection_set_safety_callback(void (*callback)(bool)){s_safety_callback=callback;}
+void connection_service_safety(bool link_available){if(s_safety_callback)s_safety_callback(link_available);}
+void connection_cooperative_wait(uint32_t duration_ms,bool link_available){
+  const uint32_t started=millis();
+  do {
+    connection_service_safety(link_available);
+    const uint32_t elapsed=static_cast<uint32_t>(millis()-started);
+    if(elapsed>=duration_ms)return;
+    delay(std::min<uint32_t>(5,duration_ms-elapsed));
+  } while(true);
+}
+// Never call WiFiClient::write: its internal select/retry can stall for seconds.
+// Controller status callbacks enqueue only, so pumping here cannot reenter a
+// controller invocation through recursive network status transmission.
+size_t connection_write(Stream& transport,const uint8_t* data,size_t length){
+  if(!data||!length)return 0;
+  const uint32_t started=millis();
+  size_t sent=0;
+  while(sent<length){
+    connection_service_safety(true);
+    if(static_cast<uint32_t>(millis()-started)>=20)break;
+    if(connection_is_wired_mode()){
+      const int available=Serial.availableForWrite();
+      if(available>0){
+        const size_t count=std::min<size_t>(length-sent,std::min<int>(available,64));
+        const size_t written=transport.write(data+sent,count);
+        if(!written)break;
+        sent+=written;
+      }else delay(1);
+    }else{
+      WiFiClient& socket=static_cast<WiFiClient&>(transport);
+      if(!socket.connected()||socket.fd()<0)break;
+      const int written=send(socket.fd(),data+sent,length-sent,MSG_DONTWAIT);
+      if(written>0)sent+=static_cast<size_t>(written);
+      else if(written<0&&(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR))delay(1);
+      else break;
+    }
+  }
+  if(sent<length && (!connection_is_wired_mode() || sent==0)){
+    connection_service_safety(false);
+    if(!connection_is_wired_mode())static_cast<WiFiClient&>(transport).stop();
+  }
+  return sent;
+}
 
 // WiFi 자격증명 캐시 (재연결 시 WiFi.begin()에 전달)
 static const char* s_ssid = nullptr;
@@ -79,6 +128,7 @@ void connection_manage(ConnectionState* state, WiFiClient& client) {
 
   // ── 1단계: WiFi AP 연결 확인 ──
   if (WiFi.status() != WL_CONNECTED) {
+    connection_service_safety(false);
     if (state->wifi_connected) {
       // WiFi가 끊김 → 서버도 끊긴 것으로 처리
       state->wifi_connected = false;
@@ -87,7 +137,7 @@ void connection_manage(ConnectionState* state, WiFiClient& client) {
     // 재연결 간격 체크 후 WiFi.begin() 재시도
     if (now - state->last_connect_attempt > WIFI_RECONNECT_INTERVAL_MS) {
       WiFi.disconnect(true);     // 이전 연결 정리 (auto-reconnect 비활성화)
-      delay(50);                 // 안정화 대기
+      connection_cooperative_wait(50, false);  // Button/watchdog stay live.
       WiFi.begin(s_ssid, s_pass);
       state->last_connect_attempt = now;
       led_show_connecting();
@@ -110,8 +160,12 @@ void connection_manage(ConnectionState* state, WiFiClient& client) {
   // ── 3단계: TCP 서버 재연결 ──
   if (!client.connected()) {
     state->server_connected = false;
+    connection_service_safety(false);
     if (now - state->last_connect_attempt > WIFI_RECONNECT_INTERVAL_MS) {
-      if (client.connect(SERVER_IP, SERVER_PORT)) {
+      IPAddress numeric_server;
+      // DNS is deliberately excluded from the safety-critical loop. The setup
+      // contract names this setting SERVER_IP; use the PC's numeric LAN address.
+      if (numeric_server.fromString(SERVER_IP) && client.connect(numeric_server, SERVER_PORT, 100)) {
         client.setNoDelay(true);   // Nagle 알고리즘 비활성화 (저지연)
         state->server_connected = true;
         protocol_init();           // 수신 상태머신 리셋 (잔여 데이터 무효화)

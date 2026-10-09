@@ -12,8 +12,10 @@ import os
 import re
 import time
 import threading
+import hashlib
+import io
+import math
 from datetime import datetime
-from pathlib import Path
 
 from emotion_system import EmotionSystem
 from info_services import InfoServices
@@ -30,6 +32,10 @@ from src.integrations import (
 )
 from src.memory_manager import MemoryManager
 from src.intent_parser import parse_intent
+from src.dialogue_policy import (
+    AudioCache, SUPPORTED_LANGUAGES, conversation_instructions, localize_message,
+    normalize_language, phrase, resolve_language, voice_for_language,
+)
 
 log = logging.getLogger(__name__)
 
@@ -73,9 +79,15 @@ class AgentMode:
         tts_model="gemini-3.8-flash-lite-tts",
         tts_gemini_voice="Kore",
         tts_api_key="",
+        dialogue_config=None,
     ):
         self.llm = llm_client
         self.tts_voice = tts_voice or "ko-KR-SunHiNeural"
+        self._dialogue_lock = threading.RLock()
+        self._dialogue = {'language': 'auto', 'short_responses': True, 'fast_model': ''}
+        self._owner_languages = {}
+        self._audio_cache = AudioCache()
+        self.configure_dialogue(**(dialogue_config or {}))
         self.tts_backend = str(tts_backend or "edge_tts").strip().lower()
         self.gemini_tts = None
         if self.tts_backend == "gemini_tts" and tts_api_key:
@@ -160,6 +172,38 @@ class AgentMode:
                 llm_client, PersonalStore(state_path), home=home,
                 soul=self.memory._cache.get("Soul.md", ""), integrations=self.integrations,
             )
+
+    def configure_dialogue(self, *, language=None, short_responses=None, fast_model=None) -> dict:
+        """Validate the whole update before changing any running dialogue settings."""
+        with self._dialogue_lock:
+            updated = dict(self._dialogue)
+            if language is not None:
+                updated['language'] = normalize_language(language, allow_auto=True)
+            if short_responses is not None:
+                if type(short_responses) is not bool:
+                    raise ValueError('short_responses must be a boolean')
+                updated['short_responses'] = short_responses
+            if fast_model is not None:
+                if not isinstance(fast_model, str) or (fast_model and not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}', fast_model)):
+                    raise ValueError('Invalid fast model identifier')
+                updated['fast_model'] = fast_model
+            self._dialogue = updated
+            return self.describe_dialogue()
+
+    def describe_dialogue(self) -> dict:
+        with self._dialogue_lock:
+            return {**self._dialogue, 'supported_languages': list(SUPPORTED_LANGUAGES)}
+
+    def _response_language(self, text: str, language: str | None, owner: str) -> str:
+        settings = getattr(self, '_dialogue', {'language': 'auto'})
+        previous = getattr(self, '_owner_languages', {}).get(owner, 'ko')
+        return resolve_language(text, language, settings.get('language', 'auto'), previous)
+
+    def _chat_dialogue(self, messages: list, *, temperature: float, max_tokens: int) -> str:
+        fast_model = getattr(self, '_dialogue', {}).get('fast_model', '')
+        if fast_model and hasattr(self.llm, 'chat_fast'):
+            return self.llm.chat_fast(messages, model=fast_model, temperature=temperature, max_tokens=max_tokens)
+        return self.llm.chat(messages, temperature=temperature, max_tokens=max_tokens)
 
     def _integration_entry(self, name: str) -> dict:
         if not isinstance(self.integration_config, dict):
@@ -412,7 +456,7 @@ class AgentMode:
     def generate_connection_greeting(self, now: datetime | None = None) -> str:
         return self._fallback_connection_greeting(now)
 
-    def _llm_failure_response(self) -> str:
+    def _llm_failure_response(self, language: str = 'ko') -> str:
         if not self.llm:
             return ""
 
@@ -426,22 +470,29 @@ class AgentMode:
         }.get(provider, "LLM")
 
         if error_code == "missing_api_key":
-            return f"지금 {provider_label} API 키가 없어서 답변을 만들 수 없어요. 설정을 확인해 주세요."
+            return phrase(language,
+                f"지금 {provider_label} API 키가 없어서 답변을 만들 수 없어요. 설정을 확인해 주세요.",
+                f"Set the {provider_label} API key to enable replies.", f"请设置{provider_label} API密钥以启用回答。",
+                f"応答するには{provider_label}のAPIキーを設定してください。", f"Configura la clave API de {provider_label} para activar las respuestas.")
 
         if error_code in {"provider_error", "unsupported_provider"}:
-            return "지금 답변 엔진 연결이 불안정해서 응답을 만들지 못했어요. 잠시 후 다시 말씀해 주세요."
+            return phrase(language, "지금 답변 엔진 연결이 불안정해서 응답을 만들지 못했어요. 잠시 후 다시 말씀해 주세요.",
+                "The answer engine is unavailable. Please try again shortly.", "回答引擎暂时无法连接。请稍后重试。",
+                "応答エンジンに接続できません。少し待って再度お願いします。", "El modelo no está disponible. Inténtalo de nuevo en un momento.")
 
         return ""
 
-    def generate_response(self, text: str, is_proactive: bool = False, speaker_id: str | None = None) -> tuple[str, str]:
+    def generate_response(self, text: str, is_proactive: bool = False, speaker_id: str | None = None,
+                          language: str | None = None) -> tuple[str, str]:
         """응답 생성. Returns (response_text, intent)."""
+        language = self._response_language(text, language, speaker_id or 'device')
         if not self.llm:
-            return "모델이 로드되지 않았습니다.", "none"
+            return localize_message("모델이 로드되지 않았습니다.", language), "none"
 
         if getattr(self, "tool_agent", None) is not None:
             if is_proactive:
-                return self._generate_proactive_response(text)
-            return self._generate_tool_response(text, speaker_id)
+                return self._generate_proactive_response(text, language)
+            return self._generate_tool_response(text, speaker_id, language)
 
         try:
             if not is_proactive:
@@ -478,22 +529,23 @@ class AgentMode:
 
             # LLM 응답 생성
             system_prompt = self._get_system_prompt()
+            system_prompt += '\n' + conversation_instructions(language, getattr(self, '_dialogue', {}).get('short_responses', True), text)
             if info_context:
                 system_prompt += f"\n\n[참고 데이터]\n{info_context}\n위 데이터를 바탕으로 자연스럽게 답변하세요."
             messages = [{"role": "system", "content": system_prompt}]
             for conv in history[-self.max_history:]:
                 messages.append({"role": conv["role"], "content": conv["content"]})
 
-            raw = self.llm.chat(messages, temperature=0.8, max_tokens=AGENT_RESPONSE_MAX_TOKENS)
+            raw = self._chat_dialogue(messages, temperature=0.8, max_tokens=AGENT_RESPONSE_MAX_TOKENS)
             if raw.strip():
                 intent, clean_text = parse_intent(raw)
                 response = self._sanitize_response(clean_text)
             else:
                 intent = "none"
-                response = self._llm_failure_response()
+                response = self._llm_failure_response(language)
 
             if not response:
-                response = "잘 이해하지 못했어요. 한 번만 다시 말씀해 주세요."
+                response = localize_message("잘 이해하지 못했어요. 한 번만 다시 말씀해 주세요.", language)
 
             # sleep 의도 처리
             if intent == "sleep":
@@ -518,7 +570,7 @@ class AgentMode:
             return response, intent
         except Exception as exc:
             log.error("LLM generation failed: %s", exc)
-            return "죄송해요, 오류가 발생했어요.", "none"
+            return localize_message("죄송해요, 오류가 발생했어요.", language), "none"
 
     @staticmethod
     def _proactive_reply_text(raw: str) -> str:
@@ -543,7 +595,7 @@ class AgentMode:
             return ''
         return text
 
-    def _generate_proactive_response(self, text: str) -> tuple[str, str]:
+    def _generate_proactive_response(self, text: str, language: str = 'ko') -> tuple[str, str]:
         """An ephemeral public-context reply with no personal history or actions."""
         if not isinstance(text, str) or not text.strip() or len(text) > 8000:
             return '선제 대화 문장을 8000자 이내로 입력해 주세요.', 'none'
@@ -560,12 +612,13 @@ class AgentMode:
                 'Do not propose tools, claim actions completed, or emit device intent tags. '
                 'Reply with conversational text only. Current local time: ' + now
             )
-            raw = self.llm.chat(
+            system += '\n' + conversation_instructions(language, getattr(self, '_dialogue', {}).get('short_responses', True), text)
+            raw = self._chat_dialogue(
                 [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}],
                 temperature=0.8, max_tokens=AGENT_RESPONSE_MAX_TOKENS,
             )
             if not isinstance(raw, str) or not raw.strip():
-                response = self._llm_failure_response() or '선제 대화 응답을 만들지 못했어요. 모델 연결을 확인해 주세요.'
+                response = self._llm_failure_response(language) or localize_message('답변 엔진에 연결하지 못했어요. 모델 설정을 확인해 주세요.', language)
             else:
                 response = self._sanitize_response(self._proactive_reply_text(raw))
                 if not response:
@@ -582,7 +635,7 @@ class AgentMode:
         finally:
             self._tool_turn_lock.release()
 
-    def _generate_tool_response(self, text: str, speaker_id: str | None) -> tuple[str, str]:
+    def _generate_tool_response(self, text: str, speaker_id: str | None, language: str = 'ko') -> tuple[str, str]:
         """Preserve owner turn order while local paths bypass another owner's model."""
         owner = speaker_id or "device"
         with self._tool_state_lock:
@@ -600,11 +653,14 @@ class AgentMode:
                 self.tool_agent.soul = self.memory._cache.get("Soul.md", "")
             # Scheduler output is data and must not become a device intent.
             if response is None:
-                response = self.tool_agent.try_direct(text, owner, history)
+                response = self.tool_agent.try_direct(text, owner, history, language=language)
                 if response is None:
                     # Provider error/fallback state is shared, so model turns stay serial.
                     with self._tool_turn_lock:
-                        response = self.tool_agent.run(text, owner, history)
+                        settings = getattr(self, '_dialogue', {})
+                        self.tool_agent.short_responses = settings.get('short_responses', True)
+                        self.tool_agent.fast_model = settings.get('fast_model', '')
+                        response = self.tool_agent.run(text, owner, history, language=language)
                 intent, response = parse_intent(response)
             else:
                 intent = "none"
@@ -621,6 +677,7 @@ class AgentMode:
                 ])
                 del history[:-self.max_history]
                 self.conversation_count += 1
+                self._owner_languages[owner] = language
                 self.emotion_system.analyze_emotion(response, speaker_id=speaker_id or "default")
             return response, intent
 
@@ -706,15 +763,35 @@ class AgentMode:
             }
         return None
 
-    async def _tts_gen(self, text, output_file):
-        """TTS 생성 - Edge TTS를 사용한 음성 합성"""
+    async def _tts_gen(self, text: str, voice: str | None = None) -> bytes:
+        """Receive compressed speech in memory; never write private speech to disk."""
         import edge_tts
+        communicate = edge_tts.Communicate(text, voice or self.tts_voice, connect_timeout=3, receive_timeout=8)
+        chunks = []
+        async for chunk in communicate.stream():
+            if chunk['type'] == 'audio':
+                chunks.append(chunk['data'])
+        return b''.join(chunks)
 
-        communicate = edge_tts.Communicate(text, self.tts_voice)
-        await communicate.save(output_file)
-
-    def text_to_audio(self, text: str, trim_pad_ms: float = 180.0):
+    def text_to_audio(self, text: str, trim_pad_ms: float = 180.0, language: str | None = None):
         """Synthesize PCM16LE, falling back to the faster Edge voice when needed."""
+        if not isinstance(text, str) or not text.strip():
+            return b''
+        if not isinstance(trim_pad_ms, (int, float)) or isinstance(trim_pad_ms, bool) or not math.isfinite(trim_pad_ms) or not 0 <= trim_pad_ms <= 5000:
+            raise ValueError('Invalid speech padding')
+        resolved = self._response_language(text, language, 'device')
+        configured_voice = getattr(self, 'tts_voice', 'ko-KR-SunHiNeural')
+        # Preserve a custom voice for its language; choose matching voices otherwise.
+        voice = configured_voice if configured_voice.split('-')[0].lower() == resolved else voice_for_language(resolved)
+        adapter = getattr(self, 'gemini_tts', None)
+        key = (getattr(self, 'tts_backend', 'edge_tts'), getattr(adapter, 'model', ''),
+               getattr(adapter, 'voice', ''), voice, resolved, hashlib.sha256(text.encode('utf-8')).digest(), float(trim_pad_ms))
+        cache = getattr(self, '_audio_cache', None)
+        if cache is None:
+            cache = self._audio_cache = AudioCache()
+        return cache.get_or_create(key, lambda: self._synthesize_audio(text, trim_pad_ms, voice))
+
+    def _synthesize_audio(self, text: str, trim_pad_ms: float, voice: str) -> bytes:
         if getattr(self, "tts_backend", "edge_tts") == "gemini_tts":
             adapter = getattr(self, "gemini_tts", None)
             if adapter is not None:
@@ -727,15 +804,12 @@ class AgentMode:
                     log.warning("Gemini TTS failed (%s); using Edge TTS", type(exc).__name__)
             else:
                 log.warning("Gemini TTS is not configured; using Edge TTS")
-        return self._edge_text_to_audio(text, trim_pad_ms=trim_pad_ms)
+        return self._edge_text_to_audio(text, trim_pad_ms=trim_pad_ms, voice=voice)
 
-    def _edge_text_to_audio(self, text: str, trim_pad_ms: float = 180.0):
+    def _edge_text_to_audio(self, text: str, trim_pad_ms: float = 180.0, voice: str | None = None):
         """텍스트를 오디오로 변환 - TTS 생성 및 오디오 후처리"""
-        tmp_mp3 = None
         try:
-            import os
             import importlib
-            import tempfile
 
             missing = []
             for mod in ("numpy", "librosa", "soundfile", "edge_tts"):
@@ -761,34 +835,26 @@ class AgentMode:
                 log.warning(
                     "audio_processor not found; skipping trim/normalize/qc post-processing"
                 )
-            with tempfile.NamedTemporaryFile(prefix="tts_", suffix=".mp3", delete=False) as tf:
-                tmp_mp3 = tf.name
-
             log.info("Generating TTS (characters=%d)", len(text))
 
-            # 이벤트 루프 설정 및 TTS 생성
+            # Each synthesis owns and closes its loop, including short-lived TTS workers.
+            loop = asyncio.new_event_loop()
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    raise RuntimeError("Event loop is closed")
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            try:
-                loop.run_until_complete(self._tts_gen(text, tmp_mp3))
+                mp3 = loop.run_until_complete(asyncio.wait_for(self._tts_gen(text, voice), timeout=15))
             except Exception as exc:
-                log.error("TTS generation failed in _tts_gen: %s", exc, exc_info=True)
+                log.error("TTS generation failed (%s)", type(exc).__name__)
                 return b""
-            if not os.path.exists(tmp_mp3):
-                log.error("TTS file not created: %s", tmp_mp3)
+            finally:
+                loop.close()
+            if not mp3:
+                log.error("TTS returned empty compressed audio")
                 return b""
 
             # 오디오 로드 및 리샘플링 (16kHz, mono)
-            pcm_f32, sr = librosa.load(tmp_mp3, sr=16000, mono=True)
+            pcm_f32, sr = librosa.load(io.BytesIO(mp3), sr=16000, mono=True)
 
             if pcm_f32.size == 0:
-                log.error("TTS audio empty after decoding: %s", tmp_mp3)
+                log.error("TTS audio empty after decoding")
                 return b""
 
             # 오디오 후처리 - DC 오프셋 제거 및 무음 구간 트림
@@ -844,11 +910,5 @@ class AgentMode:
             log.error("Install: pip install edge-tts librosa soundfile")
             return b""
         except Exception as exc:
-            log.error("TTS failed: %s", exc, exc_info=True)
+            log.error("TTS failed (%s)", type(exc).__name__)
             return b""
-        finally:
-            if tmp_mp3:
-                try:
-                    Path(tmp_mp3).unlink(missing_ok=True)
-                except Exception:
-                    pass

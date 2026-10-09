@@ -18,11 +18,12 @@ enum ServoAction {
 };
 
 void servo_init();
+bool servo_handle_control_json(const char* json, size_t length);
 void servo_set_angle(int servo_idx, int angle);
 void servo_set_angle(int angle);
 void servo_play_action(ServoAction action);
 void servo_stop();
-void servo_update();
+void servo_update(bool link_available = true);
 bool servo_is_busy();
 
 // Backward compatibility

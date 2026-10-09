@@ -742,3 +742,28 @@ def test_quiet_speech_with_brief_low_energy_closures_is_not_rejected():
     rms_db = 20 * np.log10(np.sqrt(np.mean(pcm * pcm)))
     assert rms_db < -45.0
     assert srv._voice_rejection_reason(8.0, rms_db, pcm) is None
+
+def test_home_setup_activation_changes_actual_tool_client_without_disclosing_token(tmp_path):
+    import threading
+    from types import SimpleNamespace
+    from src.integrations.home_assistant import HomeAssistantIntegration
+    home=HomeAssistantIntegration('http://home.local:8123','synthetic-private-token',['light.desk'])
+    tool=SimpleNamespace(home=home,_home_turn_lock=threading.RLock())
+    agent=SimpleNamespace(tool_agent=tool)
+    service=srv._attach_home_setup(agent,tmp_path/'private-home.json')
+    assert service is agent.home_setup_service
+    assert service.status()['active'] is True
+    assert 'synthetic-private-token' not in str(service.status())
+    service.disconnect()
+    assert tool.home is None
+
+
+def test_home_setup_does_not_claim_activation_without_tool_runtime(tmp_path):
+    from types import SimpleNamespace
+    from src.integrations.home_assistant_setup import HomeSetupError
+    import pytest
+    agent=SimpleNamespace(tool_agent=None)
+    service=srv._attach_home_setup(agent,tmp_path/'private-home.json')
+    assert service.status()['active'] is False
+    with pytest.raises(HomeSetupError):
+        service._apply_home(object())

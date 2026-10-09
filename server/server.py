@@ -30,6 +30,7 @@ from src.audio_processor import normalize_to_dbfs, qc, save_wav, trim_energy
 from src.channels import TelegramBotAdapter, TelegramBotClient, TelegramChannelService, TelegramPollingWorker
 from src.connection_manager import build_connection_manager
 from src.input_gate import InputGate
+from src.dialogue_policy import normalize_language, resolve_language
 from src.job_queue import JobQueue
 from src.llm_client import PriorityLLMClient
 from src.logging_setup import get_performance_logger, setup_logging
@@ -37,6 +38,7 @@ from src.protocol import (
     PTYPE_AUDIO,
     PTYPE_END,
     PTYPE_PING,
+    PTYPE_ROBOT_STATUS,
     PTYPE_START,
     recv_packet,
     send_action,
@@ -45,6 +47,8 @@ from src.protocol import (
 )
 from src.robot_mode import RobotMode
 from src.runtime_controller import RuntimeController
+from src.robotics.runtime import RobotRuntime
+from src.turn_dispatch import generate_turn_response as _generate_device_response
 from src.stt_engine import STTEngine
 from src.voice_id import VoiceIDService
 from src.utils import clean_text
@@ -571,9 +575,44 @@ def _send_tts_chunks(
     return True
 
 
-def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3) -> list[bytes]:
+def _attach_home_setup(agent, secret_path: str | Path):
+    """Bind the setup wizard to the actual, serialized home tool runtime."""
+    from src.integrations.home_assistant_setup import HomeAssistantSetupService, HomeSetupError
+    tool = getattr(agent, 'tool_agent', None)
+    def apply_home(home) -> None:
+        current_tool = getattr(agent, 'tool_agent', None)
+        if current_tool is None:
+            if home is not None:
+                raise HomeSetupError('activation_failed')
+            return
+        with current_tool._home_turn_lock:
+            current_tool.home = home
+    service = HomeAssistantSetupService(secret_path, apply_home,
+                                        initial_home=getattr(tool, 'home', None))
+    agent.home_setup_service = service
+    return service
+
+
+def _transcribe_turn(stt_engine, pcm, agent) -> tuple[str, str]:
+    """Preserve detected language for this response and every speech chunk."""
+    segments, info = stt_engine.safe_transcribe(pcm)
+    text = clean_text("".join(segment.text for segment in segments))
+    configured = agent.describe_dialogue().get('language', 'auto')
+    if configured != 'auto':
+        return text, normalize_language(configured)
+    detected = getattr(info, 'language', None)
+    try:
+        language = normalize_language(detected)
+    except ValueError:
+        language = resolve_language(text)
+    return text, language
+
+
+def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3,
+                              language: str | None = None) -> list[bytes]:
     log = __import__("logging").getLogger("server")
 
+    turn_options = {'language': language} if language is not None else {}
     tts_text_chunks = agent.prepare_tts_chunks(response_text, max_chunks=max_chunks)
     if not tts_text_chunks:
         log.error("TTS text chunks are empty after sanitization")
@@ -593,13 +632,13 @@ def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3) ->
             if 1 < idx < total_chunks
             else TTS_CHUNK_EDGE_PAD_MS
         )
-        # Each pool worker owns its event loop; text_to_audio uses thread-local
-        # loops and unique temporary files. Close loops before workers exit.
+        # Provide a loop for compatible adapters; AgentMode also owns and closes
+        # its synthesis loop. Speech stays in memory; close this boundary loop.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             try:
-                return agent.text_to_audio(tts_text, trim_pad_ms=trim_pad_ms)
+                return agent.text_to_audio(tts_text, trim_pad_ms=trim_pad_ms, **turn_options)
             except Exception as exc:
                 log.error("TTS chunk raised %s (%d/%d)", type(exc).__name__, idx, total_chunks)
                 return b""
@@ -610,7 +649,7 @@ def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3) ->
     indexed_chunks = list(enumerate(tts_text_chunks, start=1))
     if total_chunks == 1:
         synthesized = [agent.text_to_audio(
-            tts_text_chunks[0], trim_pad_ms=TTS_CHUNK_EDGE_PAD_MS,
+            tts_text_chunks[0], trim_pad_ms=TTS_CHUNK_EDGE_PAD_MS, **turn_options,
         )]
     else:
         with ThreadPoolExecutor(max_workers=min(3, total_chunks), thread_name_prefix="tts") as pool:
@@ -633,7 +672,7 @@ def _build_tts_audio_payloads(agent, response_text: str, max_chunks: int = 3) ->
             "Retrying TTS as a single pass after %d chunk failure(s)",
             len(failed_chunks),
         )
-        fallback_audio = agent.text_to_audio(fallback_text, trim_pad_ms=TTS_FALLBACK_PAD_MS)
+        fallback_audio = agent.text_to_audio(fallback_text, trim_pad_ms=TTS_FALLBACK_PAD_MS, **turn_options)
         if fallback_audio:
             return [fallback_audio]
         log.error("Refusing incomplete TTS playback after full fallback failed")
@@ -725,12 +764,25 @@ def handle_connection(
     input_gate = InputGate()
     connection_greeting_thread = None
     connection_greeting_attempted = False
+    robotics_runtime = getattr(agent_handler, 'robotics_runtime', None)
+    robotics_generation = None
 
     def mark_connection_ready(source: str) -> None:
+        nonlocal robotics_generation
         if connection_ready.is_set():
             return
         connection_ready.set()
         log.info("Device handshake ready via %s; TTS playback enabled", source)
+        if robotics_runtime is not None:
+            def send_robot(packet: dict) -> None:
+                if not send_action(conn, packet, send_lock):
+                    from src.robotics.models import RoboticsError
+                    raise RoboticsError('transport_failed')
+            robotics_generation = robotics_runtime.bind_atom(send_robot)
+            try:
+                robotics_runtime.discover()
+            except Exception:
+                log.warning("Robot discovery failed; check device firmware")
 
     def worker():
         global current_mode
@@ -791,8 +843,7 @@ def handle_connection(
                 text = ""
                 try:
                     stt_start = time.perf_counter()
-                    segments, _ = stt_engine.safe_transcribe(pcm)
-                    text = clean_text("".join(seg.text for seg in segments))
+                    text, turn_language = _transcribe_turn(stt_engine, pcm, agent_handler)
                     _log_voice_latency("stt", sid, stt_start, perf_logger.log_stt)
                 except Exception as exc:
                     log.exception("Transcribe failed sid=%s: %s", sid, exc)
@@ -849,7 +900,7 @@ def handle_connection(
                     runtime_response = runtime_controller.handle_text_command(text)
                     if runtime_response:
                         log.info("Runtime command applied sid=%s", sid)
-                        wav_bytes = agent_handler.text_to_audio(runtime_response)
+                        wav_bytes = agent_handler.text_to_audio(runtime_response, language=turn_language)
                         if wav_bytes:
                             _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                         input_gate.mark_idle()
@@ -878,37 +929,7 @@ def handle_connection(
                     else:
                         send_action(conn, {"action": "WIGGLE", "sid": sid}, send_lock)
 
-                if current_mode == "robot":
-                    if not text:
-                        send_action(conn, {"action": "NOOP", "sid": sid, "meaningful": False, "recognized": False}, send_lock)
-                        continue
-
-                    # Check for mode switch intent first
-                    llm_start = time.perf_counter()
-                    refined_text, robot_action = robot_handler.process_with_llm(text, cur)
-                    _log_voice_latency("llm", sid, llm_start, perf_logger.log_llm)
-
-                    if robot_action.get("action") == "SWITCH_MODE":
-                        _handle_mode_switch(robot_action.get("mode"))
-                        continue
-
-                    # Generate emotion-aware response
-                    llm_start = time.perf_counter()
-                    response_text, emotion, emotion_payload = robot_handler.generate_emotion_response(text)
-                    _log_voice_latency("llm", sid, llm_start, perf_logger.log_llm)
-                    log.info("Robot emotion=%s response_chars=%d", emotion, len(response_text))
-
-                    emotion_payload["sid"] = sid
-                    emotion_payload["recognized"] = bool(text)
-                    send_action(conn, emotion_payload, send_lock)
-
-                    # TTS for robot response (if agent_handler available)
-                    if response_text and agent_handler:
-                        wav_bytes = agent_handler.text_to_audio(response_text)
-                        if wav_bytes:
-                            _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
-
-                elif current_mode == "agent":
+                if current_mode in {"robot", "agent"}:
                     if not text:
                         continue
 
@@ -917,7 +938,7 @@ def handle_connection(
                         gate_result = voice_id_service.gate(pcm)
                         if not gate_result.allowed:
                             if gate_result.message:
-                                wav_bytes = agent_handler.text_to_audio(gate_result.message)
+                                wav_bytes = agent_handler.text_to_audio(gate_result.message, language=turn_language)
                                 if wav_bytes:
                                     _send_tts_chunks(conn, send_lock, [wav_bytes], connection_ready)
                             input_gate.mark_idle()
@@ -927,7 +948,7 @@ def handle_connection(
                     log.info("Agent Mode: processing sid=%s characters=%d identified=%s", sid, len(text), bool(speaker_id))
 
                     llm_start = time.perf_counter()
-                    response, intent = agent_handler.generate_response(text, speaker_id=speaker_id)
+                    response, intent = _generate_device_response(agent_handler, robotics_runtime, text, turn_language, speaker_id)
                     _log_voice_latency("llm", sid, llm_start, perf_logger.log_llm)
 
                     # Intent-based mode switching
@@ -944,6 +965,7 @@ def handle_connection(
                             agent_handler,
                             response,
                             max_chunks=3,
+                            language=turn_language,
                         )
                         _log_voice_latency("tts", sid, tts_start, perf_logger.log_tts)
 
@@ -986,6 +1008,11 @@ def handle_connection(
             ptype, payload = packet
 
             # Handle protocol packet types
+            if ptype == PTYPE_ROBOT_STATUS:
+                if robotics_runtime is not None and robotics_generation is not None:
+                    robotics_runtime.accept_atom(robotics_generation, payload)
+                continue
+
             if ptype == PTYPE_PING:
                 if send_pong(conn, send_lock):
                     mark_connection_ready("PING/PONG")
@@ -1085,6 +1112,8 @@ def handle_connection(
             break
 
     stop_event.set()
+    if robotics_runtime is not None and robotics_generation is not None:
+        robotics_runtime.unbind_atom(robotics_generation)
     try:
         job_queue.put(job_queue.stt_queue, None, drop_oldest=False)
     except Exception:
@@ -1115,7 +1144,7 @@ def main():
     port = config.get("server", "port")
     model_size = config.get("stt", "model_size")
     device = config.get("stt", "device")
-    language = config.get("stt", "language", default="ko")
+    language = config.get("dialogue", "language", default="auto")
 
     weather_config = config.get_weather_config()
     assistant_config = config.get_assistant_config()
@@ -1170,6 +1199,7 @@ def main():
         emotion_system=shared_emotion_system,
         integration_config=config.get("integrations", default={}),
         agent_config=config.get("agent", default={}),
+        dialogue_config=config.get("dialogue", default={}),
     )
 
     log.info(
@@ -1191,9 +1221,14 @@ def main():
         language=language,
         device_priority=runtime_controller.preferences.resolved_stt_devices(),
     )
-    runtime_controller.bind(llm_client=llm_client, stt_engine=stt_engine)
+    runtime_controller.bind(llm_client=llm_client, stt_engine=stt_engine, agent=agent_handler)
     agent_handler.runtime_controller = runtime_controller
     robot_handler.runtime_controller = runtime_controller
+    robotics_runtime = RobotRuntime(data_directory=Path(__file__).resolve().parent/'data'/'robotics')
+    robotics_runtime.start()
+    agent_handler.robotics_runtime = robotics_runtime
+    robot_handler.robotics_runtime = robotics_runtime
+    _attach_home_setup(agent_handler, Path(__file__).resolve().parent/'data'/'home-assistant-setup.json')
 
     runtime_state = _make_dashboard_runtime_state()
     warmup_status = _warm_up_runtime_assets(stt_engine, agent_handler)

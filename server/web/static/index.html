@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..600&family=Inter+Tight:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="/dashboard.css">
 <script defer src="/dashboard.js"></script>
+<script defer src="/device_setup.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main" data-i18n="common.skipToContent">Skip to content</a>
@@ -29,12 +30,14 @@
       <span class="bar-metric" id="bar-mode"><span class="bar-metric-label">Mode</span> <span class="bar-metric-value">—</span></span>
     </div>
     <div class="metrics-bar-right">
+      <button class="btn stop-btn" id="robot-stop-top" type="button" data-setup-copy="stop">STOP</button>
       <label class="locale-field-inline">
-        <select id="locale-select">
+        <select id="locale-select" aria-label="Interface language">
           <option value="en" data-i18n="locale.options.en"></option>
           <option value="ko" data-i18n="locale.options.ko"></option>
           <option value="ja" data-i18n="locale.options.ja"></option>
           <option value="zh" data-i18n="locale.options.zh"></option>
+          <option value="es" data-i18n="locale.options.es"></option>
         </select>
       </label>
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">
@@ -54,6 +57,7 @@
       </div>
 
       <nav class="nav" id="nav">
+        <button data-tab="setup" type="button"><span class="nav-icon" aria-hidden="true">↔</span><strong class="nav-label" data-i18n="nav.setup.label">Connect devices</strong><span class="nav-meta body-copy" data-i18n="nav.setup.body">Conversation and movement</span></button>
         <button class="active" data-tab="overview" type="button">
           <span class="nav-icon" aria-hidden="true">📊</span>
           <strong class="nav-label" data-i18n="nav.overview.label"></strong>
@@ -109,6 +113,35 @@
         </div>
       </header>
 
+      <section class="tab" id="tab-setup">
+        <article class="section-card surface">
+          <div class="section-head"><div><h2 data-setup-copy="title">Connect devices</h2><p class="body-copy" data-setup-copy="body"></p></div><button class="btn ghost" id="setup-refresh" type="button" data-setup-copy="refresh">Refresh</button></div>
+          <form id="dialogue-form" class="setup-conversation">
+            <h3 data-setup-copy="conversation">Conversation</h3>
+            <label><span data-setup-copy="language">Conversation language</span>
+              <select id="conversation-language"><option value="auto" data-setup-copy="auto">Detect automatically</option><option value="ko">한국어</option><option value="en">English</option><option value="zh">中文</option><option value="ja">日本語</option><option value="es">Español</option></select>
+            </label>
+            <label><input id="dialogue-short" type="checkbox" checked> <span data-setup-copy="short"></span></label>
+            <label><input id="dialogue-fast" type="checkbox"> <span data-setup-copy="fast"></span></label>
+            <button class="btn primary" type="submit" data-setup-copy="save">Save</button>
+          </form>
+        </article>
+        <article class="section-card surface">
+          <div class="section-head"><h3 data-setup-copy="hardware">Movement setup</h3><button class="btn stop-btn" id="robot-stop" type="button" data-setup-copy="stop">STOP</button></div>
+          <p class="setup-state" id="robot-status" role="status" aria-live="polite"></p>
+          <div class="action-wrap"><button class="btn secondary" id="robot-physical" type="button" data-setup-copy="physical"></button><button class="btn ghost" id="robot-sim" type="button" data-setup-copy="simulator"></button><button class="btn ghost" id="robot-discover" type="button" data-setup-copy="discover"></button></div>
+          <div class="setup-step"><label><span data-setup-copy="profile"></span><select id="robot-profile"></select></label><button class="btn secondary" id="robot-profile-prepare" type="button" data-setup-copy="prepare"></button><p class="setup-parts body-copy" id="robot-parts"></p></div>
+          <div class="setup-step"><div id="robot-calibration" class="setup-channels"></div><label class="setup-check"><input id="robot-wiring" type="checkbox"><span data-setup-copy="wiring"></span></label><button class="btn secondary" id="robot-calibrate" type="button" disabled data-setup-copy="calibrate"></button><button class="btn primary" id="robot-arm" type="button" disabled data-setup-copy="arm"></button></div>
+          <div class="setup-step"><label><span data-setup-copy="jog"></span><select id="robot-channel"><option value="0">1</option></select></label><div class="action-wrap"><button class="btn secondary" id="robot-jog-minus" type="button" disabled>−2°</button><button class="btn secondary" id="robot-jog-plus" type="button" disabled>+2°</button><button class="btn ghost" id="robot-notification" type="button" disabled data-setup-copy="notify">Notification movement</button></div><p class="body-copy" id="robot-result"></p><label><input id="robot-record" type="checkbox"><span data-setup-copy="recording"></span></label></div>
+        </article>
+        <article class="section-card surface">
+          <h3 data-setup-copy="home"></h3><p class="body-copy" data-setup-copy="homeBody"></p><p id="home-status" role="status"></p>
+          <a class="btn ghost" href="https://www.home-assistant.io/installation/windows/" target="_blank" rel="noopener noreferrer" data-setup-copy="install">Install Home Assistant</a>
+          <form id="home-connect-form" class="setup-step"><label>Home Assistant URL<input id="ha-url" type="url" placeholder="http://homeassistant.local:8123" required></label><label><span data-setup-copy="token"></span><input id="ha-token" type="password" autocomplete="off"></label><button class="btn primary" type="submit" data-setup-copy="connect"></button></form>
+          <div id="home-devices" class="setup-devices"></div><div class="action-wrap"><button class="btn secondary" id="home-allow" type="button" data-setup-copy="select"></button><button class="btn ghost" id="home-disconnect" type="button" data-setup-copy="disconnect"></button></div>
+        </article>
+      </section>
+
       <section class="tab active" id="tab-overview">
         <article class="hero surface">
           <div class="hero-copy">
@@ -118,6 +151,7 @@
               <p class="body-copy" id="hero-description"></p>
             </div>
             <div class="action-wrap">
+              <button class="btn secondary" data-tab-target="setup" type="button" data-setup-copy="title">Connect devices</button>
               <button class="btn secondary" data-tab-target="chat" type="button" data-i18n="overview.actions.chat"></button>
               <button class="btn ghost" data-tab-target="memory" data-memory-file="Soul.md" type="button" data-i18n="overview.actions.memory"></button>
             </div>

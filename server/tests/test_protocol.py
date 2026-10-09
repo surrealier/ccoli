@@ -261,3 +261,54 @@ def test_device_command_log_does_not_include_private_payload(monkeypatch, caplog
     assert protocol.send_action(None, {'action': 'DISPLAY', 'sid': 7, 'text': '비밀 응답 문장'})
     assert b'DISPLAY' in sent[0]
     assert '비밀 응답 문장' not in caplog.text
+
+def test_robot_status_packet_is_supported_and_bounded():
+    s1, s2 = socket.socketpair()
+    try:
+        payload = b'{"v":1,"event":"DONE","command_id":"test-command"}'
+        assert protocol.send_packet(s1, 0x14, payload)
+        s1.shutdown(socket.SHUT_WR)
+        assert protocol.recv_packet(s2) == (0x14, payload)
+        assert protocol._is_valid_incoming_packet_header(0x14, 2048)
+        assert not protocol._is_valid_incoming_packet_header(0x14, 2049)
+    finally:
+        s1.close()
+        s2.close()
+
+
+def test_stop_command_can_send_while_audio_pacing_waits(monkeypatch):
+    pacing_entered = threading.Event()
+    release_pacing = threading.Event()
+    command_sent = threading.Event()
+    packets = []
+    lock = threading.Lock()
+
+    class RecordingSocket:
+        def sendall(self, packet):
+            packets.append(packet)
+
+    def paced_sleep(_duration):
+        pacing_entered.set()
+        release_pacing.wait(timeout=3)
+
+    monkeypatch.setattr(protocol.time, 'sleep', paced_sleep)
+    conn = RecordingSocket()
+    audio_thread = threading.Thread(target=lambda: protocol.send_packet(
+        conn, protocol.PTYPE_AUDIO_OUT, b'12345678', lock=lock,
+        audio_chunk=4, audio_sample_rate=1, audio_max_ahead_s=0,
+    ))
+    def send_stop():
+        if protocol.send_action(conn, {'cmd':'ROBOT_CONTROL','op':'stop'}, lock):
+            command_sent.set()
+    command_thread = threading.Thread(target=send_stop)
+    try:
+        audio_thread.start()
+        assert pacing_entered.wait(timeout=1)
+        command_thread.start()
+        assert command_sent.wait(timeout=0.5), 'STOP must not wait for the paced audio stream'
+        assert [packet[0] for packet in packets] == [protocol.PTYPE_AUDIO_OUT, protocol.PTYPE_CMD]
+    finally:
+        release_pacing.set()
+        audio_thread.join(timeout=2)
+        if command_thread.ident is not None:
+            command_thread.join(timeout=2)

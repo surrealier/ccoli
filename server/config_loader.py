@@ -7,6 +7,7 @@ Configuration management module
 import copy
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -115,7 +116,10 @@ class Config:
         "stt": {
             "model_size": "turbo",
             "device": "cuda",
-            "language": "ko",
+            "language": "auto",
+        },
+        "dialogue": {
+            "language": "auto", "short_responses": True, "fast_model": "",
         },
         "llm": {
             "provider": "ollama",
@@ -282,6 +286,9 @@ class Config:
                             raise ValueError("config.yaml must contain a mapping")
                         self._yaml_config = copy.deepcopy(yaml_config)
                         self._merge_config(self.config, yaml_config)
+                        # Older installations express a fixed choice under stt.
+                        if "language" not in yaml_config.get("dialogue", {}) and "language" in yaml_config.get("stt", {}):
+                            self.config["dialogue"]["language"] = yaml_config["stt"]["language"]
                         log.info("Loaded config from %s", self.config_file)
             else:
                 log.warning("%s not found, using defaults", self.config_file)
@@ -392,6 +399,15 @@ class Config:
 
             if "STT_LANGUAGE" in os.environ:
                 self.config.setdefault("stt", {})["language"] = os.environ["STT_LANGUAGE"]
+                self.config.setdefault("dialogue", {})["language"] = os.environ["STT_LANGUAGE"]
+
+            if "DIALOGUE_LANGUAGE" in os.environ:
+                self.config.setdefault("dialogue", {})["language"] = os.environ["DIALOGUE_LANGUAGE"]
+                self.config.setdefault("stt", {})["language"] = os.environ["DIALOGUE_LANGUAGE"]
+            if "DIALOGUE_SHORT_RESPONSES" in os.environ:
+                self.config.setdefault("dialogue", {})["short_responses"] = _coerce_bool(os.environ["DIALOGUE_SHORT_RESPONSES"], True)
+            if "DIALOGUE_FAST_MODEL" in os.environ:
+                self.config.setdefault("dialogue", {})["fast_model"] = os.environ["DIALOGUE_FAST_MODEL"]
 
             if "TTS_VOICE" in os.environ:
                 self.config.setdefault("tts", {})["voice"] = os.environ["TTS_VOICE"]
@@ -592,19 +608,31 @@ class Config:
     def get_telegram_config(self) -> Dict:
         return self.config.get("telegram", {})
 
-    def save(self, config_file: str = None):
-        file_path = config_file or self.config_file
+    def save(self, config_file: str | None = None) -> None:
+        """Replace a complete file atomically; let callers roll back on failure."""
+        file_path = Path(config_file or self.config_file)
+        temporary: str | None = None
         try:
             saved = copy.deepcopy(self.config)
             for path in self._env_secret_paths:
                 _restore_nested_value(saved, self._yaml_config, path)
-            with open(file_path, "w", encoding="utf-8") as f:
-                yaml.dump(saved, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            if file_path == self.config_file:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=file_path.parent,
+                                             prefix="."+file_path.name+".", suffix=".tmp", delete=False) as stream:
+                temporary = stream.name
+                yaml.dump(saved, stream, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, file_path)
+            temporary = None
+            if str(file_path) == str(self.config_file):
                 self._yaml_config = saved
-            log.info("Configuration saved to %s", file_path)
+            log.info("Configuration saved")
         except Exception as exc:
-            log.error("Failed to save config to %s: %s", file_path, exc)
+            log.error("Configuration save failed (%s)", type(exc).__name__)
+            raise
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
 
 
 _config = None

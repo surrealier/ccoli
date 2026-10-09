@@ -21,6 +21,7 @@ PTYPE_PONG = 0x1F           # 연결 응답 (서버 → ESP32)
 PTYPE_CMD = 0x11            # 명령 전송 (서버 → ESP32)
 PTYPE_AUDIO_OUT = 0x12      # 오디오 출력 데이터 (서버 → ESP32)
 PTYPE_BUFFER_STATUS = 0x13  # 버퍼 상태 보고 (선택적)
+PTYPE_ROBOT_STATUS = 0x14   # Bounded robot capabilities / command-result telemetry
 
 _ZERO_PAYLOAD_PACKET_TYPES = {
     PTYPE_START,
@@ -168,6 +169,9 @@ def _is_valid_incoming_packet_header(ptype: int, plen: int, serial_like: bool = 
             return 0 < plen <= _MAX_INCOMING_AUDIO_PAYLOAD
         return 0 < plen <= _MAX_INCOMING_AUDIO_PAYLOAD and plen % 2 == 0
 
+    if ptype == PTYPE_ROBOT_STATUS:
+        return 0 < plen <= DEVICE_MAX_PACKET_PAYLOAD
+
     if ptype == PTYPE_BUFFER_STATUS:
         return 0 < plen <= _MAX_INCOMING_BUFFER_STATUS_PAYLOAD
 
@@ -263,12 +267,21 @@ def send_packet(
         # Never frame more than the device's receive buffer can hold.
         audio_chunk = max(1, min(int(audio_chunk), DEVICE_MAX_PACKET_PAYLOAD))
 
+        def _write_frame(frame: bytes) -> None:
+            # Keep each binary frame atomic. Audio pacing must release the link
+            # so STOP/heartbeat/control packets can be sent between frames.
+            if lock is not None:
+                with lock:
+                    conn.sendall(frame)
+            else:
+                conn.sendall(frame)
+
         def _send():
             offset = 0
             total = len(payload)
             # 페이로드가 없는 경우 헤더만 전송
             if total == 0:
-                conn.sendall(struct.pack("<BH", ptype & 0xFF, 0))
+                _write_frame(struct.pack("<BH", ptype & 0xFF, 0))
                 return True
 
             # 오디오 출력 데이터의 경우 특별 처리
@@ -287,7 +300,7 @@ def send_packet(
                         break
                     chunk = payload[offset : offset + chunk_size]
                     header = struct.pack("<BH", ptype & 0xFF, len(chunk))
-                    conn.sendall(header + chunk)
+                    _write_frame(header + chunk)
                     offset += chunk_size
                     sent_audio_bytes += chunk_size
 
@@ -311,13 +324,9 @@ def send_packet(
                         DEVICE_MAX_PACKET_PAYLOAD,
                     )
                     return False
-                conn.sendall(struct.pack("<BH", ptype & 0xFF, total) + payload)
+                _write_frame(struct.pack("<BH", ptype & 0xFF, total) + payload)
             return True
 
-        # 락이 제공된 경우 스레드 안전 전송
-        if lock:
-            with lock:
-                return _send()
         return _send()
 
     except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError) as exc:

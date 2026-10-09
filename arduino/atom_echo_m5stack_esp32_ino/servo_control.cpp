@@ -1,173 +1,49 @@
 #include "servo_control.h"
 #include "config.h"
+#include "protocol.h"
+#include <CcoliRobotControl.h>
+#include <M5Unified.h>
+#include <Esp.h>
 
-struct ActionStep {
-  uint8_t servo;
-  uint8_t angle;
-  uint16_t delay_after_ms;
-};
+static Servo motors[2];
+static bool attached[2]={false,false};
+static char device_id[32];
+static char boot_id[32];
+static ccoli_robot::Controller* controller=nullptr;
 
-struct ServoState {
-  int current_angle;
-  unsigned long next_step_time;
-  int step_index;
-  const ActionStep* current_action;
-  bool busy;
-};
-
-static Servo servos[2];
-static ServoState servo_states[2];
-
-static bool servo_hw_enabled() {
-  return SERVO_PIN_PITCH >= 0 && SERVO_PIN_TILT >= 0;
+static void motor_output(void*,uint8_t index,float angle,bool enable) {
+  if(index>=2 || !LOCAL_SERVO_ENABLED)return;
+  if(!enable) { if(attached[index])motors[index].detach(); attached[index]=false; return; }
+  const int pin=index==0?SERVO_PIN_PITCH:SERVO_PIN_TILT;
+  if(!attached[index]) { motors[index].setPeriodHertz(50);motors[index].attach(pin,500,2400);attached[index]=true; }
+  motors[index].write(static_cast<int>(lroundf(angle)));
 }
-
-static int clamp_angle(int angle) {
-  if (angle < SERVO_MIN_ANGLE) return SERVO_MIN_ANGLE;
-  if (angle > SERVO_MAX_ANGLE) return SERVO_MAX_ANGLE;
-  return angle;
-}
-
-// Action presets
-static const ActionStep action_nod_yes[] = {
-  {0, 70, 150}, {0, 90, 150}, {0, 70, 150}, {0, 90, 150}, {0, 90, 0}
-};
-
-static const ActionStep action_nod_no[] = {
-  {1, 60, 200}, {1, 120, 200}, {1, 90, 200}, {1, 90, 0}
-};
-
-static const ActionStep action_tilt_curious[] = {
-  {1, 65, 1000}, {1, 90, 0}
-};
-
-static const ActionStep action_bounce_happy[] = {
-  {0, 75, 100}, {0, 90, 100}, {0, 75, 100}, {0, 90, 100}, {0, 75, 100}, {0, 90, 100},
-  {1, 80, 150}, {1, 100, 150}, {1, 90, 0}
-};
-
-static const ActionStep action_droop_sad[] = {
-  {0, 110, 2000}, {0, 90, 0}
-};
-
-static const ActionStep action_shake_angry[] = {
-  {0, 85, 60}, {0, 95, 60}, {0, 85, 60}, {0, 95, 60}, {0, 85, 60}, {0, 95, 60}, 
-  {0, 85, 60}, {0, 95, 60}, {0, 85, 60}, {0, 90, 0}
-};
-
-static const ActionStep action_startle[] = {
-  {0, 60, 200}, {0, 90, 0}
-};
-
-static const ActionStep action_dance[] = {
-  {0, 70, 250}, {1, 60, 0}, {0, 110, 250}, {1, 120, 0}, 
-  {0, 70, 250}, {1, 60, 0}, {0, 110, 250}, {1, 120, 0},
-  {0, 70, 250}, {1, 60, 0}, {0, 110, 250}, {1, 120, 0},
-  {0, 70, 250}, {1, 60, 0}, {0, 90, 0}, {1, 90, 0}
-};
-
-static const ActionStep action_sleep_drift[] = {
-  {0, 105, 1500}, {1, 80, 1500}, {0, 90, 0}, {1, 90, 0}
-};
-
-static const ActionStep action_wiggle[] = {
-  {1, 75, 150}, {1, 105, 150}, {1, 75, 150}, {1, 105, 150}, 
-  {1, 75, 150}, {1, 90, 0}
-};
-
+static void report_status(void*,const char* json) { protocol_send_robot_status(json); }
 void servo_init() {
-  servo_states[0] = {SERVO_CENTER_ANGLE, 0, 0, nullptr, false};
-  servo_states[1] = {SERVO_CENTER_ANGLE, 0, 0, nullptr, false};
-
-  if (!servo_hw_enabled()) return;
-
-  servos[0].setPeriodHertz(50);
-  servos[0].attach(SERVO_PIN_PITCH, 500, 2400);
-  servos[1].setPeriodHertz(50);
-  servos[1].attach(SERVO_PIN_TILT, 500, 2400);
-
-  servos[0].write(SERVO_CENTER_ANGLE);
-  servos[1].write(SERVO_CENTER_ANGLE);
+  snprintf(device_id,sizeof(device_id),"atom-%012llx",static_cast<unsigned long long>(ESP.getEfuseMac()));
+  snprintf(boot_id,sizeof(boot_id),"%08lx-%08lx",static_cast<unsigned long>(esp_random()),static_cast<unsigned long>(esp_random()));
+  const char* display=DISPLAY_TYPE==1?"ssd1306":DISPLAY_TYPE==2?"st7789v2_240x280":"none";
+  static ccoli_robot::Controller instance(LOCAL_SERVO_ENABLED?2:0,device_id,boot_id,"legacy_direct",display,motor_output,report_status,nullptr);
+  controller=&instance;
+  // No attach/write at boot. Calibration and an explicit armed session are required.
 }
-
-void servo_set_angle(int servo_idx, int angle) {
-  if (!servo_hw_enabled()) return;
-  if (servo_idx < 0 || servo_idx > 1) return;
-  angle = clamp_angle(angle);
-  servos[servo_idx].write(angle);
-  servo_states[servo_idx].current_angle = angle;
+bool servo_handle_control_json(const char* json,size_t length) {
+  if(!controller)return false;
+  if(M5.BtnA.isPressed()){controller->emergencyStop("physical_stop");return true;}
+  controller->handle(json,length,millis());return true;
 }
-
-void servo_set_angle(int angle) {
-  servo_set_angle(0, angle);
+void servo_update(bool link_available) {
+  if(!controller)return;
+  if(M5.BtnA.isPressed() && controller->armed())controller->emergencyStop("physical_stop");
+  else if(controller->armed() && (!link_available || !protocol_peer_is_alive()))controller->emergencyStop("peer_lost");
+  controller->tick(millis());
 }
-
-void servo_play_action(ServoAction action) {
-  if (!servo_hw_enabled()) return;
-  const ActionStep* steps = nullptr;
-  
-  switch (action) {
-    case ACTION_NOD_YES: steps = action_nod_yes; break;
-    case ACTION_NOD_NO: steps = action_nod_no; break;
-    case ACTION_TILT_CURIOUS: steps = action_tilt_curious; break;
-    case ACTION_BOUNCE_HAPPY: steps = action_bounce_happy; break;
-    case ACTION_DROOP_SAD: steps = action_droop_sad; break;
-    case ACTION_SHAKE_ANGRY: steps = action_shake_angry; break;
-    case ACTION_STARTLE: steps = action_startle; break;
-    case ACTION_DANCE: steps = action_dance; break;
-    case ACTION_SLEEP_DRIFT: steps = action_sleep_drift; break;
-    case ACTION_WIGGLE: steps = action_wiggle; break;
-    default: return;
-  }
-  
-  servo_states[0].current_action = steps;
-  servo_states[0].step_index = 0;
-  servo_states[0].next_step_time = millis();
-  servo_states[0].busy = true;
-  servo_states[1].busy = true;
-}
-
-void servo_stop() {
-  if (!servo_hw_enabled()) return;
-  servo_states[0].busy = false;
-  servo_states[1].busy = false;
-  servo_states[0].current_action = nullptr;
-  servo_states[1].current_action = nullptr;
-  servos[0].write(SERVO_CENTER_ANGLE);
-  servos[1].write(SERVO_CENTER_ANGLE);
-}
-
-void servo_update() {
-  if (!servo_hw_enabled()) return;
-  if (!servo_states[0].busy || !servo_states[0].current_action) return;
-  
-  unsigned long now = millis();
-  if (now >= servo_states[0].next_step_time) {
-    const ActionStep& step = servo_states[0].current_action[servo_states[0].step_index];
-    servo_set_angle(step.servo, step.angle);
-    
-    if (step.delay_after_ms == 0) {
-      servo_states[0].busy = false;
-      servo_states[1].busy = false;
-      servo_states[0].current_action = nullptr;
-      return;
-    }
-    
-    servo_states[0].next_step_time = now + step.delay_after_ms;
-    servo_states[0].step_index++;
-  }
-}
-
-bool servo_is_busy() {
-  if (!servo_hw_enabled()) return false;
-  return servo_states[0].busy || servo_states[1].busy;
-}
-
-// Backward compatibility
-void servo_wiggle() {
-  servo_play_action(ACTION_WIGGLE);
-}
-
-void servo_rotate() {
-  servo_play_action(ACTION_DANCE);
-}
+bool servo_is_busy(){return controller&&controller->busy();}
+void servo_stop(){if(controller)controller->emergencyStop("legacy_stop");}
+// Older unscoped LLM packets are display-only. They cannot bypass the v1
+// calibration/session/sequence/lease contract. Use ROBOT_CONTROL move/gesture.
+void servo_set_angle(int servo_idx,int angle){(void)servo_idx;(void)angle;}
+void servo_set_angle(int angle){servo_set_angle(0,angle);}
+void servo_play_action(ServoAction action){(void)action;}
+void servo_wiggle(){servo_play_action(ACTION_WIGGLE);}
+void servo_rotate(){servo_play_action(ACTION_DANCE);}

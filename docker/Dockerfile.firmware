@@ -20,10 +20,15 @@ RUN arduino-cli core update-index --additional-urls https://m5stack.oss-cn-shenz
     arduino-cli core install m5stack:esp32@2.1.2 --additional-urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json && \
     arduino-cli lib install "M5Unified" "ESP32Servo" "Adafruit SSD1306" "Adafruit GFX Library" "Adafruit ST7735 and ST7789 Library"
 
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 # The destination directory name must match the main sketch file, otherwise
 # arduino-cli reports "main file missing from sketch" and never compiles.
 COPY arduino/atom_echo_m5stack_esp32_ino /workspace/atom_echo_m5stack_esp32_ino
+COPY arduino/robot_companion_controller /workspace/robot_companion_controller
+COPY arduino/libraries /workspace/libraries
+COPY docker/firmware-controller-smoke.cpp /workspace/firmware-controller-smoke.cpp
 COPY docker/build-firmware-variants.sh /usr/local/bin/build-firmware-variants.sh
 # COPY ships the host's bytes, so a Windows checkout can hand us CRLF and the
 # shell then fails on `set -euo pipefail\r`. Normalize regardless of host.

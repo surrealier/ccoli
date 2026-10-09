@@ -14,6 +14,7 @@ from typing import Sequence
 
 import numpy as np
 from faster_whisper import WhisperModel
+from .dialogue_policy import normalize_language
 
 
 log = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class STTEngine:
         self.beam_size = self._positive_env_int("STT_BEAM_SIZE", 1, 10)
         self.model_size = model_size
         self.device = device
-        self.language = language
+        self.language = normalize_language(language, allow_auto=True)
         self.model_lock = threading.Lock()  # 모델 접근 동기화를 위한 락
         self.model = None
         self.device_in_use = None
@@ -82,6 +83,12 @@ class STTEngine:
         if self.device_in_use not in normalized:
             self.model = None
             self.device_in_use = None
+
+    def set_language(self, language: str) -> None:
+        """Changing language does not require loading the model again."""
+        normalized = normalize_language(language, allow_auto=True)
+        with self.model_lock:
+            self.language = normalized
 
     def load_model(self, device: str):
         """
@@ -262,7 +269,7 @@ class STTEngine:
             # Whisper 음성 인식 실행 (한국어 최적화 설정)
             segments, info = self.model.transcribe(
                 pcm_f32,
-                language=self.language,
+                language=None if self.language == 'auto' else self.language,
                 beam_size=self.beam_size,                        # 빔 서치 크기
                 temperature=0.0,                    # 결정적 출력을 위한 온도 설정
                 condition_on_previous_text=False,   # 이전 텍스트 조건부 비활성화

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import logging
+import threading
 import re
 from typing import Any
 
@@ -133,12 +135,16 @@ class RuntimeController:
         self.preferences = RuntimePreferences.from_mapping(self.config.config)
         self.llm_client = None
         self.stt_engine = None
+        self.agent = None
+        self._dialogue_settings_lock = threading.RLock()
 
-    def bind(self, *, llm_client=None, stt_engine=None):
+    def bind(self, *, llm_client=None, stt_engine=None, agent=None):
         if llm_client is not None:
             self.llm_client = llm_client
         if stt_engine is not None:
             self.stt_engine = stt_engine
+        if agent is not None:
+            self.agent = agent
         self.refresh_from_config(save=False)
 
     def refresh_from_config(self, save: bool = False):
@@ -156,6 +162,45 @@ class RuntimeController:
 
         if self.stt_engine and hasattr(self.stt_engine, "set_device_priority"):
             self.stt_engine.set_device_priority(self.preferences.resolved_stt_devices())
+
+        self._apply_dialogue_settings(self._dialogue_settings())
+
+    def _dialogue_settings(self) -> dict[str, Any]:
+        values = self.config.get('dialogue', default={}) or {}
+        return {
+            'language': values.get('language', self.config.get('stt', 'language', default='auto')),
+            'short_responses': values.get('short_responses', True),
+            'fast_model': values.get('fast_model', ''),
+        }
+
+    def _apply_dialogue_settings(self, settings: dict[str, Any]) -> None:
+        if self.stt_engine is not None and hasattr(self.stt_engine, 'set_language'):
+            self.stt_engine.set_language(settings['language'])
+        if self.agent is not None and hasattr(self.agent, 'configure_dialogue'):
+            self.agent.configure_dialogue(**settings)
+
+    def update_dialogue(self, changes: dict[str, Any]) -> dict[str, Any]:
+        from .dialogue_policy import normalize_language
+        with self._dialogue_settings_lock:
+            candidate = {**self._dialogue_settings(), **changes}
+            candidate['language'] = normalize_language(candidate['language'], allow_auto=True)
+            if type(candidate['short_responses']) is not bool:
+                raise ValueError('Choose a short or detailed response style')
+            model = candidate['fast_model']
+            if not isinstance(model, str) or len(model) > 96 or (model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]*', model)):
+                raise ValueError('Choose a supported fast model')
+            previous = copy.deepcopy(self.config.config)
+            prior_settings = self._dialogue_settings()
+            try:
+                self._apply_dialogue_settings(candidate)
+                self.config.config['dialogue'] = dict(candidate)
+                self.config.config.setdefault('stt', {})['language'] = candidate['language']
+                self.config.save()
+            except Exception:
+                self.config.config = previous
+                self._apply_dialogue_settings(prior_settings)
+                raise
+            return dict(candidate)
 
     def get_connection_priority(self) -> list[str]:
         return list(self.preferences.connection_priority)

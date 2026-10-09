@@ -16,7 +16,7 @@ def _write_yaml(path, data):
 def test_defaults_when_no_yaml_exists(tmp_path):
     cfg = Config(config_file=str(tmp_path / "missing.yaml"))
     assert cfg.get("server", "port") == 5001
-    assert cfg.get("stt", "language") == "ko"
+    assert cfg.get("stt", "language") == "auto"
     assert cfg.get("features", "robot_mode_enabled") is False
     assert cfg.get("robot", "controller") == "legacy_direct"
     assert cfg.get("robot", "servo", "count") == 2

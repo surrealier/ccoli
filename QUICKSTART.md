@@ -141,7 +141,7 @@ Notes:
 ## 6. Current mode support
 
 - Agent mode: available
-- Robot mode: not available yet (Servo + Display integration in progress)
+- Robot setup: dashboard discovery/calibration/movement/STOP and simulator are implemented for Atom/companion profiles. Actual attached motors must still be verified; SO101/camera/sensor host setup is incomplete.
 
 ## 7. Optional Telegram bot channel
 
@@ -197,3 +197,13 @@ When the server binds to `0.0.0.0`, startup logs also print a LAN URL if one is 
 ## Next-generation personal and home agent
 
 This project's standard configuration enables the bounded personal tool engine and binds the dashboard to `127.0.0.1`. On this PC, dashboard authentication is enabled through the private `server/.env`; enter its `WEB_AUTH_TOKEN` once under Diagnostics > Advanced and save it. REST and live events require the same token. Keep it out of URLs and logs. Set `AGENT_ENABLED=false` to use the earlier conversation flow. To access the dashboard from another device, configure authentication and an explicit `WEB_HOST` network address. See the [usage guide](docs/NEXTGEN_AGENT_GUIDE.md), [PRD](docs/NEXTGEN_AGENT_PRD.md), [execution plan](docs/NEXTGEN_AGENT_PLAN.md), and [verification record](docs/NEXTGEN_AGENT_VERIFICATION.md).
+
+## Device setup panel
+
+Open **Device setup** in the dashboard after restarting the updated server. Set conversation language to automatic or ko/en/zh/ja/es, with short answers and optional fast Gemini conversation. Interface language is a separate selector.
+
+To try motor controls without equipment, choose **Simulator**, discover, select a supported motor profile, confirm the displayed wiring, save the ranges, enable movement, and try a ±2° move. For a real board, choose **Atom Echo** instead, install the current firmware plus `arduino/libraries/CcoliRobotControl`, and follow the profile's external-power instructions. **STOP** remains available; an acknowledgment or open-loop move completion does not establish a physical task's success.
+
+For an existing Home Assistant instance, enter its address and long-lived token, connect, select the lights/switches you allow, and save. ccoli does not install Home Assistant here. [The Home Assistant guide](docs/HOME_SETUP.md) explains installation and token creation.
+
+The [robot guide](docs/ROBOTICS_CORE_GUIDE.md), [optional VLA worker guide](docs/LEROBOT_VLA_POC.md), and [verification record](docs/EVERYDAY_PHYSICAL_AI_VERIFICATION.md) distinguish implemented software, public-fixture experiments, and remaining hardware/host integration.

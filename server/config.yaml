@@ -4,7 +4,11 @@ server:
 stt:
   model_size: turbo
   device: cuda
-  language: ko
+  language: auto
+dialogue:
+  language: auto
+  short_responses: true
+  fast_model: gemini-3.5-flash-lite
 llm:
   provider: gemini
   base_url: ''

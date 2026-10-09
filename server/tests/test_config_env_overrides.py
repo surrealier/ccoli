@@ -138,3 +138,48 @@ def test_save_preserves_explicit_yaml_secret_while_env_overrides_runtime(tmp_pat
     reloaded = Config(config_file=str(path))
     assert reloaded.get("web", "auth_token") == "synthetic-env-token"
     assert reloaded.get("llm", "gemini_api_key") == "synthetic-env-key"
+
+
+def test_dialogue_defaults_and_explicit_environment_language(tmp_path, monkeypatch):
+    monkeypatch.delenv('STT_LANGUAGE', raising=False)
+    monkeypatch.delenv('DIALOGUE_LANGUAGE', raising=False)
+    cfg = Config(str(tmp_path/'missing.yaml'))
+    assert cfg.get('dialogue','language') == 'auto'
+    assert cfg.get('stt','language') == 'auto'
+    assert cfg.get('dialogue','short_responses') is True
+    assert cfg.get('dialogue','fast_model') == ''
+    monkeypatch.setenv('STT_LANGUAGE', 'zh')
+    cfg = Config(str(tmp_path/'missing.yaml'))
+    assert cfg.get('dialogue','language') == 'zh'
+    monkeypatch.setenv('DIALOGUE_LANGUAGE', 'es')
+    monkeypatch.setenv('DIALOGUE_SHORT_RESPONSES','false')
+    monkeypatch.setenv('DIALOGUE_FAST_MODEL','gemini-3.5-flash-lite')
+    cfg = Config(str(tmp_path/'missing.yaml'))
+    assert cfg.get('dialogue','language') == cfg.get('stt','language') == 'es'
+    assert cfg.get('dialogue','short_responses') is False
+    assert cfg.get('dialogue','fast_model') == 'gemini-3.5-flash-lite'
+
+
+def test_config_save_failure_preserves_original_file_and_reports_failure(tmp_path, monkeypatch):
+    import os
+    import pytest
+    path = tmp_path/'config.yaml'
+    original = 'stt:\n  language: ko\n'
+    path.write_text(original, encoding='utf-8')
+    cfg = Config(str(path))
+    cfg.config['stt']['language'] = 'es'
+    def fail(*_args):
+        raise OSError('synthetic-private-path')
+    monkeypatch.setattr(os, 'replace', fail)
+    with pytest.raises(OSError):
+        cfg.save()
+    assert path.read_text(encoding='utf-8') == original
+    assert not list(tmp_path.glob('.*.tmp'))
+
+
+def test_legacy_fixed_stt_yaml_remains_explicit_dialogue_choice(tmp_path, monkeypatch):
+    monkeypatch.delenv('STT_LANGUAGE', raising=False)
+    monkeypatch.delenv('DIALOGUE_LANGUAGE', raising=False)
+    path = tmp_path/'config.yaml'
+    path.write_text('stt:\n  language: ko\n', encoding='utf-8')
+    assert Config(str(path)).get('dialogue','language') == 'ko'

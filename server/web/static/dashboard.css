@@ -855,3 +855,28 @@ pre{
 
 /* ── Touch: prevent double-tap zoom delay ── */
 button,a,select,input[type="submit"]{touch-action:manipulation}
+
+/* Device setup follows the existing Greenhouse tokens. */
+#tab-setup { gap: var(--space-lg); }
+.setup-conversation { display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-md); }
+.setup-conversation h3 { flex-basis:100%; }
+.setup-step { margin-top:var(--space-lg);padding-top:var(--space-md);border-top:1px solid var(--hairline); }
+.setup-step label { display:block;margin:var(--space-sm) 0; }
+.setup-check,.setup-device { display:flex !important;align-items:flex-start;gap:var(--space-xs); }
+.setup-parts { white-space:pre-line; }
+.setup-channels { display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:var(--space-md); }
+.setup-channel { min-width:0;border:1px solid var(--hairline);border-radius:var(--radius-sm);padding:var(--space-md); }
+.setup-channel label { display:flex;align-items:center;justify-content:space-between;gap:var(--space-xs); }
+.setup-channel input[type=number] { width:80px; }
+.setup-state { font-weight:600; }
+.stop-btn { background:var(--danger);color:white;font-weight:700; }
+.btn:disabled { opacity:.45;cursor:not-allowed; }
+.setup-devices { display:grid;gap:var(--space-xs); }
+@media (max-width:620px) {
+  .setup-conversation { align-items:stretch;flex-direction:column; }
+  .setup-step input[type=url],.setup-step input[type=password] { width:100%; }
+  .setup-channels { grid-template-columns:1fr; }
+}
+
+#tab-setup label:has(input[type=checkbox]) {display:flex;align-items:center;gap:var(--space-xs);justify-content:flex-start;}
+#tab-setup input[type=checkbox] {width:18px;height:18px;min-width:18px;margin:0;flex:0 0 auto;accent-color:var(--primary);}

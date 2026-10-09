@@ -26,6 +26,12 @@ struct ConnectionState {
 // 초기화: WiFi STA 모드 설정 및 첫 연결 시도
 void connection_init(ConnectionState* state, const char* ssid, const char* pass);
 
+// Single-loop-owner safety callback. A false link immediately invalidates motion.
+void connection_set_safety_callback(void (*callback)(bool link_available));
+void connection_service_safety(bool link_available);
+void connection_cooperative_wait(uint32_t duration_ms, bool link_available);
+size_t connection_write(Stream& transport, const uint8_t* data, size_t length);
+
 // 매 loop()에서 호출: WiFi/서버 상태 확인 및 재연결
 void connection_manage(ConnectionState* state, WiFiClient& client);
 

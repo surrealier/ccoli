@@ -1,0 +1,39 @@
+services:
+  policy-worker:
+    image: ccoli-vla:0.6.1
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.robotics
+    init: true
+    shm_size: 2gb
+    environment:
+      HF_HOME: /cache/huggingface
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: '1'
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      HF_TOKEN: ''
+      WANDB_MODE: disabled
+      WANDB_DISABLED: 'true'
+      DO_NOT_TRACK: '1'
+      OMP_NUM_THREADS: '4'
+      MKL_NUM_THREADS: '4'
+    volumes:
+      - vla-model-cache:/cache
+      - ../output/robotics-poc:/work
+    # No .env, private camera directories, device nodes, or network listener.
+    command: ['smoke', '--output', '/work/smoke.json']
+  policy-worker-cuda:
+    extends:
+      service: policy-worker
+    profiles: ['cuda']
+    image: ccoli-vla-cuda:0.6.1
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.robotics
+      args:
+        TORCH_WHEEL_INDEX: https://download.pytorch.org/whl/cu128
+    gpus:
+      - driver: nvidia
+        count: all
+    command: ['smoke', '--device', 'cuda', '--output', '/work/smoke-cuda.json']
+volumes:
+  vla-model-cache:

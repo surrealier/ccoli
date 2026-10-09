@@ -147,12 +147,12 @@ def create_app(
     from .routes import (
         api_status, api_memory, api_conversation,
         api_schedules, api_config, api_integrations,
-        api_chat, api_logs, api_diagnostics, api_agent,
+        api_chat, api_logs, api_diagnostics, api_agent, api_dialogue, api_robotics, api_home_setup,
     )
     for mod in (
         api_status, api_memory, api_conversation,
         api_schedules, api_config, api_integrations,
-        api_chat, api_logs, api_diagnostics, api_agent,
+        api_chat, api_logs, api_diagnostics, api_agent, api_dialogue, api_robotics, api_home_setup,
     ):
         app.include_router(mod.router)
 

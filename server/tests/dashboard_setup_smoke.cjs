@@ -1,0 +1,46 @@
+"use strict";
+const fs = require("node:fs");
+const vm = require("node:vm");
+const assert = require("node:assert/strict");
+const nodes = new Map();
+function element() { return {value:"",checked:false,disabled:false,textContent:"",innerHTML:"",dataset:{},classList:{add(){},remove(){},toggle(){}},addEventListener(){},setAttribute(){},appendChild(){}}; }
+const document = {querySelector(id){if(!nodes.has(id)) nodes.set(id,element());return nodes.get(id);},querySelectorAll(){return[];},addEventListener(){},createElement:element,documentElement:{setAttribute(){},removeAttribute(){}},body:element()};
+const calls = [];
+const context = vm.createContext({document,console,window:{setInterval(){},setTimeout(){},clearTimeout(){}},localStorage:{getItem(){return null;},setItem(){},removeItem(){}},Headers,URLSearchParams,TextEncoder,btoa,fetch:async()=>({ok:true,headers:{get(){return"application/json";}},json:async()=>({})}),WebSocket:class{}});
+vm.runInContext(fs.readFileSync("/app/dashboard.js","utf8"),context);
+vm.runInContext(fs.readFileSync("/app/device_setup.js","utf8"),context);
+vm.runInContext("toast = () => {}; api = async (path, options={}) => { testCalls.push({path,options}); return {}; }; loadRobotics = async () => {};",context);
+context.testCalls = calls;
+function run(code){return vm.runInContext(code,context);}
+(async()=>{
+  run("SETUP.status = {controller:{armed:false,calibrated:false,state:'disconnected'},selected_source:'atom',physical_connected:false}; renderRobotStatus();");
+  assert.equal(nodes.get("#robot-jog-plus").disabled,true);
+  assert.equal(nodes.get("#robot-arm").disabled,true);
+  assert.equal(nodes.get("#robot-stop").disabled,false);
+  run("SETUP.status = {controller:{armed:true,calibrated:true,state:'armed',commanded_angles:[90],calibration:[{max_speed_dps:30}]},selected_source:'sim',physical_connected:false}; renderRobotStatus();");
+  assert.equal(nodes.get("#robot-jog-plus").disabled,false);
+  assert.ok(nodes.get("#robot-status").textContent.includes("Simulator"));
+  run("SETUP.profile = {id:'direct_1',servo_count:1};");
+  await run("calibrateRobot()");
+  assert.equal(calls.length,0);
+  nodes.get("#robot-wiring").checked=true;
+  for (const [name,value] of Object.entries({min:70,center:90,max:110,speed:30})) document.querySelector("#robot-0-"+name).value=String(value);
+  await run("calibrateRobot()");
+  const body=JSON.parse(calls[0].options.body);
+  assert.equal(calls[0].path,"/api/robotics/calibrate");
+  assert.equal(body.channels[0].servo,0);
+  assert.equal(body.wiring_confirmed,true);
+  calls.length=0;
+  await run("stopRobot()");
+  assert.equal(calls[0].path,"/api/robotics/stop");
+  assert.equal(calls[0].options.method,"POST");
+  calls.length=0;
+  await run("homeAction('disconnect')");
+  assert.equal(calls[0].path,"/api/home-setup/disconnect");
+  assert.deepEqual(JSON.parse(calls[0].options.body),{});
+  run("clearSetupState()");
+  assert.equal(nodes.get("#ha-token").value,"");
+  assert.equal(nodes.get("#robot-jog-plus").disabled,true);
+  assert.equal(run("SETUP.status"),null);
+  console.log("Dashboard setup controls PASS");
+})().catch(error=>{console.error(error);process.exitCode=1;});

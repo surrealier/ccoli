@@ -1,6 +1,7 @@
 """Multi-provider LLM client (Ollama / Gemini / Claude / ChatGPT)."""
 import json
 import logging
+import re
 from typing import Optional, Union
 
 import requests
@@ -251,7 +252,9 @@ class LLMClient:
         }
         if self.model.lower().startswith("gemini-3"):
             generation_config.pop("temperature")
-            generation_config["thinkingConfig"] = {"thinkingLevel": "low"}
+            generation_config["thinkingConfig"] = {
+                "thinkingLevel": "minimal" if self.model.lower() == 'gemini-3.5-flash-lite' else "low"
+            }
         elif self._gemini_supports_thinking_budget():
             generation_config["thinkingConfig"] = {
                 "thinkingBudget": GEMINI_THINKING_BUDGET,
@@ -608,6 +611,26 @@ class PriorityLLMClient:
         if errors and not self.last_error:
             self._remember_error("provider_error", ", ".join(errors))
         return ""
+
+    def chat_fast(self, messages: list, *, model: str, temperature: float = 0.8,
+                  max_tokens: int = 512, think: ThinkType = None) -> str:
+        """Opt-in evaluated model; failures use the normal chain before any action."""
+        if not isinstance(model, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}', model):
+            raise ValueError('Invalid fast model identifier')
+        provider = ('gemini' if model.startswith('gemini-') else 'claude' if model.startswith('claude-')
+                    else 'chatgpt' if model.startswith('gpt-') else 'ollama')
+        key = '' if provider == 'ollama' else self._api_key_for_provider(provider)
+        if provider == 'ollama' or key:
+            fast = self._client_for_candidate(provider, model, key)
+            try:
+                response = fast.chat(messages, temperature=temperature, max_tokens=max_tokens, think=think)
+            except Exception as exc:
+                log.warning('Fast model failed (%s); using the normal model chain', type(exc).__name__)
+                response = ''
+            if isinstance(response, str) and response.strip():
+                self.last_error_code, self.last_error = None, ''
+                return response.strip()
+        return self.chat(messages, temperature=temperature, max_tokens=max_tokens, think=think)
 
     def describe_runtime(self) -> dict:
         return {

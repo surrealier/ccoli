@@ -35,3 +35,9 @@ server/.env
 /pytest-*/
 /pytest-calendar-run/
 /tmp/
+
+/server/data/robotics/
+
+/server/data/home-assistant-setup.json
+
+/server/data/.home-setup-*

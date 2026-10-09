@@ -113,6 +113,14 @@ static inline float frame_rms(const int16_t* x, size_t n) {
   return sqrtf(ss / (float)n);
 }
 
+// Single cooperative owner for both controller inputs and local safety. This
+// callback also runs inside bounded connection waits and nonblocking TX retries.
+static void service_device_safety(bool link_available) {
+  M5.update();
+  servo_update(link_available);
+  robot_bridge_update(link_available);
+}
+
 // ============================================================
 // setup() - one-time run: initialize all hardware and software modules
 // ============================================================
@@ -130,6 +138,7 @@ void setup() {
   // Initialize LED -> indicate connecting (red)
   led_init();
   servo_init();
+  connection_set_safety_callback(service_device_safety);
   display_init();
   display_set_state(DS_BOOT);
   led_show_connecting();
@@ -166,7 +175,9 @@ void setup() {
 // ============================================================
 void loop() {
   // Update M5Unified internal state (button, touch, etc.)
-  M5.update();
+  connection_service_safety(connection_is_wired_mode() ||
+      (WiFi.status() == WL_CONNECTED && client.connected()));
+  protocol_flush_robot_status();
 
   // -- Button interrupt: stop immediately when button is pressed during TTS playback --
   #if ENABLE_BUTTON_INTERRUPT
@@ -182,7 +193,7 @@ void loop() {
   connection_manage(&conn_state, client);
   if (!connection_transport_ready(&conn_state)) {
     display_update();
-    delay(100);
+    connection_cooperative_wait(100, false);
     return;
   }
 
@@ -193,7 +204,7 @@ void loop() {
   // If server is disconnected, wait 100ms and retry (CPU saving)
   if (!connection_is_server_connected(&conn_state)) {
     display_update();
-    delay(connection_is_wired_mode() ? 10 : 100);
+    connection_cooperative_wait(connection_is_wired_mode() ? 10 : 100, false);
     return;
   }
 
@@ -288,7 +299,7 @@ void loop() {
   // -- Peripheral updates --
   led_update_pattern();  // LED animation pattern
   display_update();      // LCD/OLED face animation + state rendering
-  servo_update();        // Servo async action (rotate/wiggle) step processing
-  robot_bridge_update();
+  connection_service_safety(true);
+  protocol_flush_robot_status();
   delay(1);              // Feed watchdog + yield CPU
 }

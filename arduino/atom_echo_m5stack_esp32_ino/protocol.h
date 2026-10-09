@@ -28,9 +28,12 @@ static constexpr uint8_t PTYPE_AUDIO_OUT = 0x12;  // Wi-Fi: PCM16LE/16kHz, wired
 static constexpr uint8_t PTYPE_PONG      = 0x1F;  // 핑 응답 (선택적)
 
 // 양방향 (예약)
+static constexpr uint8_t PTYPE_ROBOT_STATUS = 0x14;
 static constexpr uint8_t PTYPE_BUFFER_STATUS = 0x13;  // 버퍼 상태 보고 (미구현)
 
 // ── 공개 API ──
+bool protocol_send_robot_status(const char* json);
+void protocol_flush_robot_status();
 void protocol_init();                          // 수신 상태머신 초기화
 bool protocol_send_packet(Stream& transport,   // 패킷 송신 (헤더+페이로드)
                           uint8_t type,

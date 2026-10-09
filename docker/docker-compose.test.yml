@@ -36,5 +36,7 @@ services:
     working_dir: /app
     volumes:
       - ../server/web/static/dashboard.js:/app/dashboard.js:ro
+      - ../server/web/static/device_setup.js:/app/device_setup.js:ro
+      - ../server/tests/dashboard_setup_smoke.cjs:/app/dashboard_setup_smoke.cjs:ro
       - ../server/tests/dashboard_auth_smoke.cjs:/app/dashboard_auth_smoke.cjs:ro
-    command: node dashboard_auth_smoke.cjs
+    command: ["sh", "-c", "node dashboard_auth_smoke.cjs && node dashboard_setup_smoke.cjs"]

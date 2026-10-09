@@ -210,7 +210,7 @@ flowchart LR
 - 🧭 **Runtime priority routing** — resolves model, network, and processor candidates in priority order, then keeps the selected LLM route until config or priority is reloaded
 - 🔌 **Integrations** — weather, calendar, search, maps, notifications
 - 🎙️ **Voice ID** — speaker recognition to personalize responses
-- 🤖 **Robot mode** *(coming soon)* — servo/display control via voice
+- 🤖 **Robot setup** — explicit discovery, calibration, small moves, and STOP for supported Atom/companion profiles; simulation available for setup practice
 - 🐳 **Docker tests** — reproducible test suite out of the box
 
 ## 🖥️ Terminal UI Flow
@@ -459,3 +459,13 @@ Open http://localhost:8005 for the multilingual dashboard with `English` as the 
 ## Next-generation personal and home agent
 
 This project's standard configuration enables the bounded personal tool engine and binds the dashboard to `127.0.0.1`. Set `AGENT_ENABLED=false` to use the earlier conversation flow. To access the dashboard from another device, configure authentication and an explicit `WEB_HOST` network address. See the [usage guide](docs/NEXTGEN_AGENT_GUIDE.md), [PRD](docs/NEXTGEN_AGENT_PRD.md), [execution plan](docs/NEXTGEN_AGENT_PLAN.md), and [verification record](docs/NEXTGEN_AGENT_VERIFICATION.md).
+
+## Everyday agent and device setup
+
+The dashboard's **Device setup** panel separates interface language from conversation language. Choose automatic detection or Korean, English, Chinese, Japanese, or Spanish. Short answers are enabled by default; asking for detail still produces a fuller answer. The project configuration selects `gemini-3.5-flash-lite` for fast Gemini conversation after a public five-language comparison. The existing primary chain remains available on failure. See [measured dialogue latency and its limits](docs/DIALOGUE_LATENCY.md).
+
+For motors, select **Simulator** to practice without equipment, or **Atom Echo** for a connected board. Discover the board, select a matching profile, read its parts/wiring/power instructions, confirm wiring, save each channel's range, and explicitly enable movement. Try a ±2° move before a task. The permanent **STOP** button stops movement. Connecting or selecting a profile does not activate motors. Install the shared `arduino/libraries/CcoliRobotControl` library with the current firmware before using these controls. See [robot setup and safety](docs/ROBOTICS_CORE_GUIDE.md) and [firmware protocol](docs/ROBOT_FIRMWARE_PROTOCOL.md).
+
+Home Assistant connects an existing instance to selected lights/switches. In Device setup, enter its address and token, connect, select permitted devices, then save. The token is stored privately rather than in public YAML. Installation remains a separate step; see [Home Assistant setup](docs/HOME_SETUP.md).
+
+An optional separate LeRobot/SmolVLA worker implements learned inference, local recording preparation, training, evaluation, and checkpoint rollback. Actual CPU/CUDA public-fixture evidence is in [the VLA guide](docs/LEROBOT_VLA_POC.md). SO101/camera/sensor setup still needs host UI integration and actual hardware verification; a passing simulation or learned-model fixture does not prove a household task works. The full scope and remaining acceptance criteria are in [the Physical AI PRD](docs/EVERYDAY_PHYSICAL_AI_PRD.md) and [verification record](docs/EVERYDAY_PHYSICAL_AI_VERIFICATION.md).
