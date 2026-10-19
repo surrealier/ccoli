@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="assets/ccoli.png" alt="ccoli logo" />
+<img src="assets/ccoli.png" alt="ccoli, an ESP32 voice assistant" />
 
 # 🥦 ccoli
 
 **Talk to your ESP32. Let your PC think.**
 
-Voice-first AI assistant for Arduino makers — speak to an Atom Echo, get intelligent responses powered by local or cloud LLMs.
+An open-source ESP32 voice assistant for Arduino makers — speak to an M5Stack Atom Echo, and your PC runs speech-to-text (faster-whisper), a local or cloud LLM (Ollama, Gemini, Claude, ChatGPT) and text-to-speech.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
@@ -50,7 +50,7 @@ Official Atom Echo links:
 ### 1. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/surrealier/LLM_Aduino/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/surrealier/ccoli/main/scripts/install.sh | bash
 ```
 
 The bootstrap script installs the lightweight CLI first, then hands off the rest to `ccoli setup`.
@@ -210,7 +210,7 @@ flowchart LR
 - 🧭 **Runtime priority routing** — resolves model, network, and processor candidates in priority order, then keeps the selected LLM route until config or priority is reloaded
 - 🔌 **Integrations** — weather, calendar, search, maps, notifications
 - 🎙️ **Voice ID** — speaker recognition to personalize responses
-- 🤖 **Robot mode** *(coming soon)* — servo/display control via voice
+- 🤖 **Robot mode** *(off by default)* — servo/display control via voice
 - 🐳 **Docker tests** — reproducible test suite out of the box
 
 ## 🖥️ Terminal UI Flow
@@ -286,7 +286,7 @@ Useful terminal commands after setup:
 <details>
 <summary><b>LLM Provider</b></summary>
 
-Default is Ollama (local, no API key). Switch anytime:
+The repository config uses Gemini when an API key is set and falls back to local Ollama (no API key). Switch anytime:
 
 ```bash
 ccoli setup
@@ -296,7 +296,8 @@ ccoli config llm --provider claude --model claude-sonnet-5-5 --api-key <ANTHROPI
 ccoli config llm --provider chatgpt --model gpt-6-luna --api-key <OPENAI_API_KEY>
 ```
 
-API key 발급:
+Where to get an API key:
+
 | Provider | Get API Key |
 |----------|-------------|
 | Gemini | [Google AI Studio](https://aistudio.google.com/apikey) |
@@ -366,7 +367,8 @@ Google Calendar uses OAuth credentials, not a simple API key. See `docs/GOOGLE_C
 
 Missing keys? The `test` command tells you exactly what to set.
 
-Integration API key 발급:
+Where to get an integration API key:
+
 | Integration | Get API Key |
 |-------------|-------------|
 | Weather | [OpenWeatherMap](https://home.openweathermap.org/api_keys) |
@@ -442,6 +444,18 @@ ccoli/
 | [docs/API.md](docs/API.md) | Server module map |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Binary protocol spec |
 | [docs/PRD.md](docs/PRD.md) | Product requirements |
+| [docs/NEXTGEN_AGENT_GUIDE.md](docs/NEXTGEN_AGENT_GUIDE.md) | Personal and home agent usage guide (Korean) |
+| [docs/TELEGRAM_CHANNEL_GUIDE.md](docs/TELEGRAM_CHANNEL_GUIDE.md) | Telegram bot channel setup |
+| [docs/GOOGLE_CALENDAR_GUIDE.md](docs/GOOGLE_CALENDAR_GUIDE.md) | Google Calendar OAuth setup |
+| [docs/HOME_ASSISTANT_GUIDE.md](docs/HOME_ASSISTANT_GUIDE.md) | Home Assistant integration (Korean) |
+
+## 🌐 Web dashboard
+
+Open http://localhost:8005 for the multilingual dashboard with `English` as the default UI, optional `한국어 / 日本語 / 中文` switching, a diagnostics-first runtime view, editable memory/schedules/chat, and live logs.
+
+## 🏠 Next-generation personal and home agent
+
+This project's standard configuration enables the bounded personal tool engine and binds the dashboard to `127.0.0.1`. Set `AGENT_ENABLED=false` to use the earlier conversation flow. To access the dashboard from another device, configure authentication and an explicit `WEB_HOST` network address. See the [usage guide](docs/NEXTGEN_AGENT_GUIDE.md), [PRD](docs/NEXTGEN_AGENT_PRD.md), [execution plan](docs/NEXTGEN_AGENT_PLAN.md), and [verification record](docs/NEXTGEN_AGENT_VERIFICATION.md).
 
 ## 🔒 Security
 
@@ -451,11 +465,3 @@ ccoli/
 ## 📜 License
 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
-
-## Web dashboard
-
-Open http://localhost:8005 for the multilingual dashboard with `English` as the default UI, optional `한국어 / 日本語 / 中文` switching, a diagnostics-first runtime view, editable memory/schedules/chat, and live logs.
-
-## Next-generation personal and home agent
-
-This project's standard configuration enables the bounded personal tool engine and binds the dashboard to `127.0.0.1`. Set `AGENT_ENABLED=false` to use the earlier conversation flow. To access the dashboard from another device, configure authentication and an explicit `WEB_HOST` network address. See the [usage guide](docs/NEXTGEN_AGENT_GUIDE.md), [PRD](docs/NEXTGEN_AGENT_PRD.md), [execution plan](docs/NEXTGEN_AGENT_PLAN.md), and [verification record](docs/NEXTGEN_AGENT_VERIFICATION.md).

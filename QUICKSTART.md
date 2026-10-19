@@ -3,7 +3,7 @@
 ## 1. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/surrealier/LLM_Aduino/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/surrealier/ccoli/main/scripts/install.sh | bash
 ```
 
 The bootstrap script installs the lightweight CLI first, then opens `ccoli setup` so you can choose:
