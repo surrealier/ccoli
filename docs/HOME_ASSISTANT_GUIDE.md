@@ -36,7 +36,7 @@ URL은 HTTP/HTTPS와 호스트가 필요합니다. 사용자명·비밀번호, �
 연결·인증 실패나 리디렉션은 사용자에게 설정 확인을 안내합니다. 응답 본문, 토큰과 원래 예외 문자열은 오류 메시지에 포함하지 않습니다. 상태 응답이 잘못되거나 `unknown`/`unavailable`이면 제어 성공으로 보고하지 않습니다.
 
 ```powershell
-docker compose -f docker/docker-compose.test.yml run --rm -v C:/bongkj/Projects/LLM_Arduino/server:/app/server server-test pytest server/tests/test_home_assistant.py -q
+docker compose -f docker/docker-compose.test.yml run --rm -v <repo>/server:/app/server server-test pytest server/tests/test_home_assistant.py -q
 ```
 
 47개 fake-session 테스트로 URL·허용 목록·인증·HTTP 실패·타임아웃·리디렉션·잘못된 JSON·상태 확인·오류 비밀값 비노출을 검증했습니다. 실제 Home Assistant 및 물리 장비 검증을 대신하지 않습니다. 사용 중단은 토큰 또는 허용 목록을 제거하고 서버를 재시작하면 됩니다.

@@ -51,7 +51,7 @@ Docker 시작 오류는 stale userAnalyticsOtlpHttp.sock이 원인이었다. Doc
 ## 최종 소스 자동 검증 및 현재 실행 상태 (9/22)
 
 - 최종 음성 표현 수정 포함 전체: **490 passed, 1 skipped, 4 warnings**, 16.91초, exit0.
-- 실행 명령: `docker compose -f docker/docker-compose.test.yml run --rm -v C:/bongkj/Projects/LLM_Arduino/server:/app/server server-test pytest server/tests -q --tb=short`. 직전 전체 이미지 재빌드 Compose 검증은 483 passed이며 마지막 소스는 이 마운트 실행으로 검증했다.
+- 실행 명령: `docker compose -f docker/docker-compose.test.yml run --rm -v <repo>/server:/app/server server-test pytest server/tests -q --tb=short`. 직전 전체 이미지 재빌드 Compose 검증은 483 passed이며 마지막 소스는 이 마운트 실행으로 검증했다.
 - 독립 리뷰에서 발견한 복합 요청 오류는 RED 2 → GREEN65, 음성 표현 변경은 RED9 → GREEN72로 검증했다. 루트가 최종 결과 생성 코드와 전체 회귀를 확인했다.
 - 최종 서버 재시작 후 23:08:14 COM3 연결. 실제 Gemini에 기억 저장+할 일 조회를 요청해 “확인된 실행 결과: 기억 저장 … 확인된 조회 결과: 할 일: 남은 할 일이 없습니다.” 응답과 memory.remember/tasks.list 성공 기록을 확인했다. 검증용 기억은 memory.forget으로 삭제했다.
 - 서버 로그: `output/nextgen-runtime/server-0922-final.stdout.log`, stderr 동일 접두사. 대시보드 `http://127.0.0.1:8005`.
@@ -145,7 +145,7 @@ Docker 시작 오류는 stale userAnalyticsOtlpHttp.sock이 원인이었다. Doc
 - 운영 로그의 약 8.18초, 전체 RMS -46.7~-51.8 dBFS 입력은 기존 -45 dBFS 전체 평균 검사에서 STT 전에 폐기됐다. 원본 오디오를 저장하지 않으므로 실제 사용자 발화인지 판단하지 않았다.
 - 전체 RMS가 낮아도 240ms 안의 20ms 창 12개 중 9개가 기존 음량 바닥을 넘으면 Whisper VAD에 보내도록 서버 필터를 보정했다. 전역 임계값은 그대로이며 100ms 단발 충격음과 지속 저음량 입력은 폐기한다. 펌웨어는 변경하지 않았다.
 - Docker RED: 처음 3개 합성 테스트에서 새 PCM 분류 인자가 없음을 확인했다. 창 정렬/짧은 저에너지 공백에 대한 추가 2개도 기존 구현에서 실패하는 것을 확인했다. GREEN: 필터 6개 통과. 독립 2단계 리뷰의 경계·공백 제보를 테스트로 재현해 해결했고 최종 읽기 전용 리뷰에서 blocker 없음.
-- 최종 Docker Compose 전체 소스 테스트 `docker compose -f docker/docker-compose.test.yml run --rm -v C:/bongkj/Projects/LLM_Arduino/server:/app/server server-test pytest server/tests -q --tb=short`: **546 passed, 1 skipped, 3 warnings**, exit0. 앞선 전체 이미지 재빌드 544 passed/1 skipped는 경계 보강 전 스냅샷이다. `client-sim smoke passed`, Docker CLI 도움말 exit0, diff --check 통과.
+- 최종 Docker Compose 전체 소스 테스트 `docker compose -f docker/docker-compose.test.yml run --rm -v <repo>/server:/app/server server-test pytest server/tests -q --tb=short`: **546 passed, 1 skipped, 3 warnings**, exit0. 앞선 전체 이미지 재빌드 544 passed/1 skipped는 경계 보강 전 스냅샷이다. `client-sim smoke passed`, Docker CLI 도움말 exit0, diff --check 통과.
 - 로그인 작업 `ccoli Nextgen Agent`만 재시작한 후 Running, COM3 connected, turbo/CUDA STT 및 TTS 준비를 확인했다. 합성 웹 인사는 1.878초, 18자 응답, 활성 `gemini-3.8-flash`, 공급자 오류 없음. 원문·오디오를 로그에 남기지 않았다.
 - 현재 코드의 의도한 실제 사용자 발화→스피커 가청 응답 및 체감 지연은 아직 직접 확인하지 않았다. Home Assistant 실기 인스턴스와 Claude/OpenAI 계정 키도 미설정이다. 기존 가청 확인은 이전 버전에 대한 사용자 답변이므로 이 변경의 실기 성공으로 간주하지 않는다.
 
